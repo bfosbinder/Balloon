@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find \"C:\\\\Users\\\\brian\\\\Downloads\" -maxdepth 2 -iname \"*.pdf\" 2>/dev/null | head -50)",
+      "Bash(base64 -w0 \"C:\\\\Users\\\\brian\\\\Downloads\\\\DEMO-1042_manifold_body.pdf\")",
+      "PowerShell(Get-Process -Id 4 -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\")",
+      "PowerShell(Stop-Process -Id 14528 -Force -Confirm:$false)",
+      "PowerShell(Get-Process -Id 14528 -ErrorAction SilentlyContinue)",
+      "Bash(python3 build_offline.py)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git config *)"
+    ]
+  }
+}

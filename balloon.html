@@ -1,0 +1,2779 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Balloon — drawing markup &amp; inspection record</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+
+<style>
+:root{
+  --ink:#131a21;
+  --panel:#1b242e;
+  --panel-2:#212d39;
+  --rule:#2e3d4b;
+  --rule-soft:#26323e;
+  --paper:#f7f6f2;
+  --red:#d0342c;
+  --red-soft:#e8574d;
+  --stamp:#2f9e6b;
+  --amber:#d99a20;
+  --text:#dfe6ec;
+  --muted:#7e8fa0;
+  --dim:#5c6d7d;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+  --sans:"Inter","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--ink);color:var(--text);font-family:var(--sans);
+  font-size:13px;display:flex;flex-direction:column;overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--red-soft);outline-offset:1px}
+
+/* ---------- micro label, the drawing-lettering voice ---------- */
+.lab{
+  font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dim);
+}
+
+/* ---------- toolbar ---------- */
+.bar{
+  display:flex;align-items:center;gap:6px;padding:0 10px;height:46px;flex:0 0 auto;
+  background:var(--panel);border-bottom:1px solid var(--rule);
+}
+.brand{display:flex;align-items:baseline;gap:8px;margin-right:6px;padding-right:12px;border-right:1px solid var(--rule)}
+.brand b{font-size:14px;font-weight:700;letter-spacing:-.01em}
+.brand span{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.sep{width:1px;height:22px;background:var(--rule);margin:0 4px;flex:0 0 auto}
+.spacer{flex:1 1 auto}
+
+.btn{
+  background:var(--panel-2);border:1px solid var(--rule);border-radius:3px;
+  padding:6px 11px;cursor:pointer;white-space:nowrap;
+  transition:background .12s,border-color .12s;
+}
+.btn:hover:not(:disabled){background:#2a3846;border-color:#3d4f60}
+.btn:disabled{opacity:.35;cursor:default}
+.btn.primary{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+.btn.primary:hover:not(:disabled){background:var(--red-soft);border-color:var(--red-soft)}
+.btn.icon{padding:6px 9px;font-family:var(--mono);line-height:1}
+.btn.tiny{padding:4px 9px;font-size:11.5px}
+
+.seg{display:flex;border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.seg button{background:var(--panel-2);border:0;padding:6px 12px;cursor:pointer}
+.seg button + button{border-left:1px solid var(--rule)}
+.seg button[aria-pressed="true"]{background:var(--red);color:#fff;font-weight:600}
+
+.readout{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:70px;text-align:center}
+.check{display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted)}
+.check input{accent-color:var(--red);margin:0}
+
+/* save state — the only thing standing between a shift's work and a stray Ctrl+W */
+.savestate{
+  display:flex;align-items:center;gap:6px;padding:0 10px 0 4px;
+  font-family:var(--mono);font-size:11px;color:var(--dim);white-space:nowrap;
+}
+.savestate[hidden]{display:none}
+.savestate .dot{width:6px;height:6px;border-radius:50%;background:var(--dim);flex:0 0 auto}
+.savestate.unsaved{color:var(--amber)}
+.savestate.unsaved .dot{background:var(--amber);box-shadow:0 0 6px rgba(217,154,32,.6)}
+.savestate.clean .dot{background:var(--stamp)}
+
+/* ---------- shell ---------- */
+.shell{flex:1 1 auto;display:flex;min-height:0}
+
+/* ---------- left panel ---------- */
+.side{
+  width:388px;flex:0 0 auto;background:var(--panel);border-right:1px solid var(--rule);
+  display:flex;flex-direction:column;min-height:0;
+}
+
+/* the job folder — where everything for this part lives */
+.job{
+  flex:0 0 auto;background:#18212a;border-bottom:1px solid var(--rule);
+  padding:9px 12px 10px;position:relative;
+}
+.job::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--rule);transition:background .15s}
+.job.on::before{background:var(--stamp)}
+.job-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
+.job-name{font-family:var(--mono);font-size:13px;color:var(--text);word-break:break-all}
+.job.on .job-name{color:#fff}
+.job-name.off{color:var(--dim)}
+.job-stat{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px;line-height:1.4}
+#jobAct{width:100%;margin-top:8px}
+
+/* signature: the unit tag — the thing every result hangs off */
+.tag{
+  flex:0 0 auto;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  padding:9px 12px 10px;position:relative;
+}
+.tag::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--rule);
+  transition:background .15s;
+}
+.tag.set::before{background:var(--red)}
+.tag-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px}
+.tag-sel{display:inline-flex;align-items:center;gap:3px;min-width:0}
+.tag-sel::after{content:"\25be";font-size:8px;color:var(--dim);pointer-events:none}
+.tag-sel:hover::after{color:var(--muted)}
+.tag-label{
+  background:transparent;border:0;padding:0;cursor:pointer;
+  -webkit-appearance:none;-moz-appearance:none;appearance:none;
+  font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dim);
+}
+.tag-label:hover{color:var(--muted)}
+.tag-label:focus{outline:0;color:var(--text)}
+.tag-label option{background:var(--panel-2);color:var(--text);letter-spacing:0;text-transform:none}
+.tag-chips{display:flex;align-items:center;gap:5px}
+.chip{
+  font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.09em;
+  text-transform:uppercase;padding:2px 7px;border-radius:2px;
+  border:1px solid var(--rule);background:transparent;color:var(--dim);
+}
+.chip.seq{color:var(--muted);border-color:var(--rule)}
+.chip.rework{cursor:pointer}
+.chip.rework:hover{border-color:var(--amber);color:var(--amber)}
+.chip.rework[aria-pressed="true"]{border-color:var(--amber);color:var(--amber);background:rgba(217,154,32,.1)}
+.tag-id{
+  width:100%;background:transparent;border:0;border-bottom:1px dashed var(--rule);
+  padding:3px 0 5px;font-family:var(--mono);font-size:19px;font-weight:600;
+  letter-spacing:.02em;color:var(--text);
+}
+.tag-id::placeholder{color:#3d4b58;font-weight:400;letter-spacing:0}
+.tag-id:focus{outline:0;border-bottom-color:var(--red);color:#fff}
+.tag-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:7px;min-height:24px}
+.warn{font-size:11px;color:var(--amber);line-height:1.35;flex:1 1 auto;min-width:0}
+.warn[hidden]{display:none}
+
+/* title block */
+.titleblock{border-bottom:1px solid var(--rule);flex:0 0 auto}
+.tb-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:8px 12px 7px;
+}
+.titleblock.open .tb-head{border-bottom:1px solid var(--rule)}
+.tb-toggle{
+  display:flex;align-items:center;gap:6px;background:transparent;border:0;
+  padding:0;cursor:pointer;min-width:0;
+}
+.tb-toggle .caret{
+  font-size:9px;color:var(--dim);transition:transform .15s;display:inline-block;
+}
+.titleblock.open .tb-toggle .caret{transform:rotate(90deg)}
+.tb-toggle:hover .lab,.tb-toggle:hover .caret{color:var(--muted)}
+.tb-sum{padding:0 12px 9px;min-width:0}
+.tb-sum[hidden]{display:none}
+.tb-sum b{
+  display:block;font-family:var(--mono);font-size:12.5px;font-weight:600;
+  color:var(--text);word-break:break-word;
+}
+.tb-sum span{
+  display:block;font-family:var(--mono);font-size:10.5px;color:var(--dim);
+  margin-top:2px;word-break:break-word;
+}
+.tb-sum.none b{color:var(--dim);font-weight:400;font-style:italic}
+.tb-grid{display:grid;grid-template-columns:1fr 1fr 1fr}
+/* an explicit display beats the UA's [hidden] rule, so say it here too */
+.tb-grid[hidden]{display:none}
+.cell{border-right:1px solid var(--rule-soft);border-bottom:1px solid var(--rule-soft);padding:5px 9px 6px;min-width:0}
+.cell:nth-child(3n){border-right:0}
+.cell.wide{grid-column:span 2}
+.cell.full{grid-column:span 3;border-right:0}
+.cell input{
+  width:100%;background:transparent;border:0;padding:2px 0 0;
+  font-family:var(--mono);font-size:12.5px;color:var(--text);
+}
+.cell input::placeholder{color:#41505e}
+.cell input:focus{outline:0;color:#fff}
+.cell:focus-within{background:var(--panel-2)}
+/* group divider — encodes the layout / record split */
+.grp{
+  grid-column:span 3;background:#18212a;padding:4px 12px 3px;
+  border-bottom:1px solid var(--rule-soft);display:flex;justify-content:space-between;align-items:center;
+}
+.grp .ver{font-family:var(--mono);font-size:9.5px;color:var(--dim);letter-spacing:.06em}
+
+/* layout lock */
+.lockbar{
+  display:flex;align-items:center;gap:9px;padding:9px 12px;flex:0 0 auto;
+  background:rgba(217,154,32,.08);border-bottom:1px solid var(--rule);
+  border-left:3px solid var(--amber);
+}
+.lockbar[hidden]{display:none}
+.lockbar p{margin:0;flex:1 1 auto;font-size:11.5px;line-height:1.45;color:var(--muted)}
+.lockbar b{color:var(--text);font-weight:600}
+
+/* list */
+.list-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:11px 12px 9px;border-bottom:1px solid var(--rule);flex:0 0 auto;
+}
+.tally{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.tally b{color:var(--text);font-weight:600}
+.list{flex:1 1 auto;overflow:auto;overscroll-behavior:contain}
+
+.empty{padding:34px 26px;text-align:center;color:var(--muted);line-height:1.65}
+.empty strong{display:block;color:var(--text);font-size:14px;margin-bottom:7px;font-weight:600}
+.empty kbd{
+  font-family:var(--mono);font-size:11px;background:var(--panel-2);
+  border:1px solid var(--rule);border-radius:3px;padding:1px 5px;
+}
+
+.row{border-bottom:1px solid var(--rule-soft);padding:9px 12px 11px;cursor:pointer;position:relative}
+.row:hover{background:#1f2a35}
+.row.sel{background:#22303d}
+.row.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--red)}
+.row-top{display:flex;align-items:flex-start;gap:9px}
+
+.pip{
+  flex:0 0 auto;width:22px;height:22px;border-radius:50%;
+  border:1.5px solid var(--red);color:var(--red-soft);background:rgba(208,52,44,.08);
+  font-family:var(--mono);font-size:11px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;margin-top:1px;
+}
+.req{
+  flex:1 1 auto;min-width:0;background:transparent;border:0;border-bottom:1px dashed transparent;
+  font-family:var(--mono);font-size:13.5px;padding:3px 0;resize:none;line-height:1.35;
+  overflow:hidden;
+}
+.req:hover{border-bottom-color:var(--rule)}
+.req:focus{outline:0;border-bottom-color:var(--red);color:#fff}
+.req::placeholder{color:#4a5866}
+.req:read-only{border-bottom-color:transparent;color:var(--text);cursor:default}
+.req:read-only:hover{border-bottom-color:transparent}
+
+.kill{
+  flex:0 0 auto;background:transparent;border:0;color:var(--dim);cursor:pointer;
+  font-family:var(--mono);padding:2px 4px;border-radius:3px;
+}
+.kill:hover{color:var(--red-soft);background:rgba(208,52,44,.1)}
+.kill:disabled{opacity:.25;cursor:default}
+.kill:disabled:hover{color:var(--dim);background:transparent}
+
+.nums{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:8px 0 0 31px}
+.f{display:flex;flex-direction:column;gap:3px;min-width:0}
+.f input,.f select{
+  width:100%;background:var(--ink);border:1px solid var(--rule);border-radius:3px;
+  padding:4px 5px;font-family:var(--mono);font-size:12px;
+}
+.f input:focus,.f select:focus{outline:0;border-color:var(--red)}
+.f input::placeholder{color:#3d4b58}
+.f input:read-only,.f select:disabled{background:#161f27;color:var(--muted);border-color:var(--rule-soft)}
+.f.actual input{border-color:#3a4a58;background:#101820}
+.f.actual input:read-only{border-color:#3a4a58;background:#101820;color:var(--text)}
+
+.meta{display:flex;align-items:center;gap:8px;margin:8px 0 0 31px}
+.meta select{
+  flex:1 1 auto;background:var(--ink);border:1px solid var(--rule);border-radius:3px;
+  padding:4px 5px;font-size:11.5px;color:var(--muted);
+}
+
+/* the stamp */
+.stamp{
+  flex:0 0 auto;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.1em;
+  padding:3px 8px;border:1.5px solid currentColor;border-radius:2px;text-transform:uppercase;
+}
+.stamp.ok{color:var(--stamp)}
+.stamp.no{color:var(--red-soft)}
+.stamp.na{color:var(--dim);border-style:dashed}
+
+/* ---------- viewport ---------- */
+.stage{flex:1 1 auto;position:relative;min-width:0;background:#0d1319;overflow:auto}
+.stage.drop{box-shadow:inset 0 0 0 2px var(--red)}
+.sheet{position:relative;margin:26px auto;width:max-content;line-height:0;filter:drop-shadow(0 10px 30px rgba(0,0,0,.55))}
+#pdf{display:block;background:var(--paper)}
+#ov{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair}
+.stage.pan #ov{cursor:grab}
+.stage.pan.grabbing #ov{cursor:grabbing}
+
+.leader{stroke:var(--red);fill:none;vector-effect:non-scaling-stroke;stroke-width:1.25}
+.bub{cursor:move}
+.bub circle{fill:#fff;stroke:var(--red);vector-effect:non-scaling-stroke;stroke-width:1.6}
+.bub text{
+  fill:var(--red);font-family:var(--mono);font-weight:700;
+  text-anchor:middle;dominant-baseline:central;user-select:none;
+}
+.bub.sel circle{fill:#ffe9e7;stroke-width:2.6}
+.bub.new circle{animation:pop .28s cubic-bezier(.2,1.5,.5,1)}
+@keyframes pop{from{r:0}}
+.anchor{fill:var(--red)}
+
+.hint{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  text-align:center;color:var(--muted);line-height:1.7;pointer-events:none;
+  width:min(440px,80%);
+}
+.hint strong{display:block;color:var(--text);font-size:17px;margin-bottom:9px;font-weight:600;letter-spacing:-.01em}
+.hint em{font-style:normal;color:var(--dim);font-size:12px}
+
+/* a failure an operator can't miss by looking away — stays until dismissed */
+.alert{
+  display:flex;align-items:flex-start;gap:10px;padding:11px 12px;flex:0 0 auto;
+  background:rgba(208,52,44,.12);border-bottom:1px solid var(--rule);
+  border-left:3px solid var(--red);
+}
+.alert[hidden]{display:none}
+.alert-body{flex:1 1 auto;min-width:0}
+.alert p{margin:0;font-size:12px;line-height:1.5;color:var(--text)}
+#alertAct{margin-top:8px}
+#alertAct[hidden]{display:none}
+.alert .dismiss{
+  flex:0 0 auto;background:transparent;border:0;color:var(--dim);cursor:pointer;
+  font-family:var(--mono);padding:2px 5px;border-radius:3px;
+}
+.alert .dismiss:hover{color:var(--red-soft);background:rgba(208,52,44,.14)}
+
+/* ---------- operator mode ---------- */
+.parts{flex:1 1 auto;overflow:auto;min-height:0}
+.parts[hidden]{display:none}
+.part{
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%;
+  background:transparent;border:0;border-bottom:1px solid var(--rule-soft);
+  padding:12px;cursor:pointer;text-align:left;
+}
+.part:hover{background:#1f2a35}
+.part b{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--text)}
+.part:hover b{color:#fff}
+.part span{font-family:var(--mono);font-size:10.5px;color:var(--dim);white-space:nowrap}
+.part.bare b{color:var(--dim);font-weight:400}
+.filter{padding:9px 12px;border-bottom:1px solid var(--rule);flex:0 0 auto}
+.filter input{
+  width:100%;background:var(--ink);border:1px solid var(--rule);border-radius:3px;
+  padding:7px 9px;font-family:var(--mono);font-size:13px;
+}
+.filter input:focus{outline:0;border-color:var(--red)}
+
+/* progress — the operator's only real question is "am I done yet" */
+.prog{padding:10px 12px;border-bottom:1px solid var(--rule);flex:0 0 auto}
+.prog[hidden]{display:none}
+.prog-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:7px}
+.prog-n{font-family:var(--mono);font-size:16px;font-weight:600;color:var(--text)}
+.prog-n b{color:var(--stamp)}
+.prog-bad{font-family:var(--mono);font-size:11px;color:var(--red-soft)}
+.prog-bar{height:5px;border-radius:3px;background:#2a3846;overflow:hidden;display:flex}
+.prog-bar i{display:block;height:100%;background:var(--stamp);transition:width .2s}
+.prog-bar i.bad{background:var(--red)}
+.op-save{margin:10px 12px 0;width:calc(100% - 24px)}
+body.operator .planner-only{display:none!important}
+
+/* ---------- toast ---------- */
+.toast{
+  position:fixed;left:50%;bottom:22px;transform:translateX(-50%);
+  background:var(--panel-2);border:1px solid var(--rule);border-left:3px solid var(--red);
+  border-radius:3px;padding:10px 16px;max-width:460px;line-height:1.5;
+  box-shadow:0 8px 26px rgba(0,0,0,.5);z-index:50;
+}
+.toast[hidden]{display:none}
+
+/* ---------- menu ---------- */
+.wrap{position:relative}
+.menu{
+  position:absolute;right:0;top:calc(100% + 5px);background:var(--panel-2);
+  border:1px solid var(--rule);border-radius:3px;min-width:246px;padding:4px;z-index:40;
+  box-shadow:0 10px 30px rgba(0,0,0,.5);
+}
+.menu[hidden]{display:none}
+.menu button{
+  display:block;width:100%;text-align:left;background:transparent;border:0;
+  padding:7px 10px;border-radius:2px;cursor:pointer;
+}
+.menu button:hover:not(:disabled){background:var(--red);color:#fff}
+.menu button:disabled{opacity:.35;cursor:default}
+.menu hr{border:0;border-top:1px solid var(--rule);margin:4px 0}
+.menu .cap{padding:6px 10px 3px;display:block}
+
+/* ---------- inspect mode ---------- */
+.chips{display:flex;border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.chips button{background:var(--panel-2);border:0;padding:6px 11px;cursor:pointer;font-size:12px}
+.chips button + button{border-left:1px solid var(--rule)}
+.chips button[aria-pressed="true"]{background:#33434f;color:#fff;font-weight:600}
+
+.spec{
+  margin:7px 0 0 31px;font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  display:flex;gap:12px;flex-wrap:wrap;
+}
+.spec b{color:var(--text);font-weight:500}
+
+.take{display:flex;align-items:flex-end;gap:8px;margin:9px 0 0 31px}
+.take .f{flex:0 0 118px}
+.take .f.grow{flex:1 1 auto}
+.take input{
+  background:#0d1319;border:1px solid #3a4a58;border-radius:3px;
+  padding:6px 8px;font-family:var(--mono);font-size:15px;width:100%;
+}
+.take input:focus{outline:0;border-color:var(--red);background:#101a22}
+.take .note input{font-size:12px;padding:7px 8px}
+.dev{font-family:var(--mono);font-size:12px;padding-bottom:7px;white-space:nowrap}
+.dev.ok{color:var(--stamp)}
+.dev.no{color:var(--red-soft)}
+
+/* signature for inspect: where the measurement landed in the band */
+.band{margin:10px 0 1px 31px;height:16px;position:relative}
+.band .track{
+  position:absolute;left:0;right:0;top:6px;height:4px;border-radius:2px;
+  background:linear-gradient(90deg,#2a3846,#33434f 12%,#33434f 88%,#2a3846);
+}
+.band .mid{position:absolute;top:2px;bottom:2px;left:50%;width:1px;background:#4c5f6f}
+.band .tick{position:absolute;top:0;width:2px;height:16px;border-radius:1px;transform:translateX(-1px)}
+.band .tick.ok{background:var(--stamp);box-shadow:0 0 7px rgba(47,158,107,.55)}
+.band .tick.no{background:var(--red-soft);box-shadow:0 0 7px rgba(232,87,77,.55)}
+.band .cap{position:absolute;top:1px;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.band .cap.l{left:0}
+.band .cap.r{right:0}
+
+.ro{
+  margin-top:2px;font-family:var(--mono);font-size:13.5px;line-height:1.35;
+  flex:1 1 auto;min-width:0;word-break:break-word;
+}
+.ro.none{color:#4a5866;font-style:italic}
+
+/* balloon status on the print, inspect mode only */
+.bub.st-open circle{stroke:#6d7f8f}
+.bub.st-open text{fill:#5f7080}
+.bub.st-ok circle{stroke:var(--stamp)}
+.bub.st-ok text{fill:var(--stamp)}
+.bub.st-ok.sel circle{fill:#e6f7ef}
+.bub.st-no.sel circle{fill:#ffe9e7}
+.leader.st-open{stroke:#6d7f8f}
+.leader.st-ok{stroke:var(--stamp)}
+.anchor.st-open{fill:#6d7f8f}
+.anchor.st-ok{fill:var(--stamp)}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:900px){.side{width:300px}.nums{grid-template-columns:repeat(2,1fr)}}
+</style>
+
+<div class="bar">
+  <div class="brand"><b>Balloon</b><span>rev&nbsp;3</span></div>
+
+  <button class="btn primary planner-only" id="open">Open drawing</button>
+  <input type="file" id="file" accept="application/pdf,.pdf" hidden>
+
+  <div class="sep"></div>
+  <button class="btn icon" id="prev" disabled>&#8249;</button>
+  <div class="readout" id="pager">— / —</div>
+  <button class="btn icon" id="next" disabled>&#8250;</button>
+
+  <div class="sep"></div>
+  <button class="btn icon" id="zout" disabled>&minus;</button>
+  <div class="readout" id="zread">100%</div>
+  <button class="btn icon" id="zin" disabled>+</button>
+  <button class="btn" id="fit" disabled>Fit</button>
+
+  <div class="sep planner-only"></div>
+  <div class="seg planner-only" role="group" aria-label="Working mode">
+    <button id="vLay" aria-pressed="true">Lay out</button>
+    <button id="vIns" aria-pressed="false">Inspect</button>
+  </div>
+
+  <span id="layoutOnly" class="planner-only" style="display:flex;align-items:center;gap:6px">
+    <div class="sep"></div>
+    <div class="seg" role="group" aria-label="Pointer mode">
+      <button id="mBal" aria-pressed="true">Balloon</button>
+      <button id="mPan" aria-pressed="false">Pan</button>
+    </div>
+    <label class="check" title="Pull the dimension text out of the PDF when you click"><input type="checkbox" id="grab" checked> Read text</label>
+  </span>
+
+  <span id="inspectOnly" style="display:none;align-items:center;gap:6px">
+    <div class="sep"></div>
+    <div class="chips" role="group" aria-label="Show characteristics">
+      <button id="fAll" aria-pressed="true">All</button>
+      <button id="fOpen" aria-pressed="false">Open</button>
+      <button id="fBad" aria-pressed="false">Rejects</button>
+    </div>
+    <button class="btn" id="jump">Next open</button>
+  </span>
+
+  <div class="spacer"></div>
+  <div class="savestate" id="savestate" hidden><span class="dot"></span><span id="savetext"></span></div>
+  <button class="btn planner-only" id="renum" disabled>Renumber</button>
+  <div class="wrap planner-only">
+    <button class="btn" id="exp">Export &#9662;</button>
+    <div class="menu" id="expMenu" hidden>
+      <span class="lab cap">This unit</span>
+      <button id="eCsv">Inspection list (.csv)</button>
+      <button id="ePdf">Ballooned drawing (.pdf)</button>
+      <button id="eJson">Save inspection (.json)</button>
+      <hr>
+      <span class="lab cap">Reusable</span>
+      <button id="eLayout">Save layout only (.json)</button>
+      <button id="iJson">Load layout or inspection (.json)</button>
+      <hr>
+      <button id="eLog">Session log — all units (.csv)</button>
+    </div>
+  </div>
+  <input type="file" id="jfile" accept="application/json,.json" hidden>
+</div>
+
+<div class="shell">
+  <aside class="side">
+
+    <div class="alert" id="alert" hidden>
+      <div class="alert-body">
+        <p id="alertmsg"></p>
+        <button class="btn tiny" id="alertAct" hidden></button>
+      </div>
+      <button class="dismiss" id="alertx" title="Dismiss">&#10005;</button>
+    </div>
+
+    <div class="filter" id="partFilter" hidden>
+      <input id="partSearch" placeholder="Find a part…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="parts" id="parts" hidden></div>
+
+    <section class="job" id="job">
+      <div class="job-head">
+        <span class="lab">Job folder</span>
+        <button class="btn tiny" id="jobOpen">Open&hellip;</button>
+      </div>
+      <div class="job-name off" id="jobName">not connected</div>
+      <div class="job-stat" id="jobStat"></div>
+      <button class="btn tiny primary" id="jobAct" hidden></button>
+      <button class="btn tiny" id="jobBack" hidden></button>
+    </section>
+
+    <section class="tag" id="tag">
+      <div class="tag-head">
+        <span class="tag-sel">
+          <select class="tag-label" id="u_label" aria-label="How this unit is identified">
+            <option>Serial No.</option>
+            <option>Lot + Piece</option>
+            <option>Traveler No.</option>
+            <option>Unit ID</option>
+          </select>
+        </span>
+        <div class="tag-chips">
+          <span class="chip seq" id="u_seq" hidden>#1</span>
+          <button class="chip rework" id="u_rework" aria-pressed="false"
+                  title="Mark this as a re-inspection after rework">Rework</button>
+        </div>
+      </div>
+      <input class="tag-id" id="u_id" placeholder="not set" autocomplete="off" spellcheck="false">
+      <div class="tag-foot">
+        <span class="warn" id="u_warn" hidden></span>
+        <button class="btn tiny" id="u_new">Next unit</button>
+      </div>
+    </section>
+
+    <section class="titleblock open" id="titleblock">
+      <div class="tb-head">
+        <button class="tb-toggle" id="tbToggle" aria-expanded="true" aria-controls="tbGrid">
+          <span class="caret">&#9656;</span><span class="lab">Title block</span>
+        </button>
+        <span class="lab" id="srcName">no drawing loaded</span>
+      </div>
+      <div class="tb-sum" id="tbSum" hidden></div>
+      <div class="tb-grid" id="tbGrid">
+        <div class="grp"><span class="lab">Part — shared by every unit</span><span class="ver" id="layVer">layout v1</span></div>
+        <div class="cell wide"><div class="lab">Part number</div><input id="h_partNo" placeholder="—"></div>
+        <div class="cell"><div class="lab">Rev</div><input id="h_rev" placeholder="—"></div>
+        <div class="cell full"><div class="lab">Part name</div><input id="h_partName" placeholder="—"></div>
+        <div class="cell wide"><div class="lab">Drawing number</div><input id="h_dwgNo" placeholder="—"></div>
+        <div class="cell"><div class="lab">ID format</div><input id="h_pattern" placeholder="any"></div>
+
+        <div class="grp"><span class="lab">This unit only</span></div>
+        <div class="cell wide"><div class="lab">Inspector</div><input id="h_insp" placeholder="—"></div>
+        <div class="cell"><div class="lab">Date</div><input id="h_date" placeholder="—"></div>
+        <div class="cell full"><div class="lab">Order / traveler</div><input id="h_order" placeholder="—"></div>
+      </div>
+    </section>
+
+    <div class="lockbar" id="lockbar" hidden>
+      <p id="lockmsg"></p>
+      <button class="btn tiny" id="revise">Revise layout</button>
+    </div>
+
+    <div class="prog" id="prog" hidden>
+      <div class="prog-top">
+        <span class="prog-n" id="progN"></span>
+        <span class="prog-bad" id="progBad"></span>
+      </div>
+      <div class="prog-bar"><i id="progOk" style="width:0"></i><i class="bad" id="progNo" style="width:0"></i></div>
+      <button class="btn primary op-save" id="opSave">Save this part</button>
+    </div>
+
+    <div class="list-head">
+      <span class="lab">Characteristics</span>
+      <span class="tally" id="tally">0 total</span>
+    </div>
+    <div class="list" id="list"></div>
+  </aside>
+
+  <main class="stage" id="stage">
+    <div class="sheet" id="sheet" hidden>
+      <canvas id="pdf"></canvas>
+      <svg id="ov" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div class="hint" id="hint">
+      <strong>Open a drawing to start ballooning.</strong>
+      Click a dimension on the print and it becomes characteristic 1. Drag the balloon
+      clear of the geometry — the leader stays put.
+      <br><br><em>PDF stays on this machine. Nothing is uploaded.</em>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+// A Worker can't be constructed from a cross-origin script URL — browsers throw
+// a SecurityError, silently ever since (getDocument still resolves, but the
+// render never does). Only works via workerSrc-as-URL when this page's own
+// origin happens to be cdnjs, which it never is. So: fetch the worker script
+// ourselves and hand pdf.js a same-origin blob: URL instead. Opening the file
+// directly (file://) tolerates the direct URL, but anything served over
+// http(s) — an intranet copy, a share mapped to a web server — does not.
+const workerReadyPromise = (async () => {
+  try{
+    const resp = await fetch(
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js");
+    if(!resp.ok) throw new Error("HTTP "+resp.status);
+    const code = await resp.text();
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      URL.createObjectURL(new Blob([code], {type:"application/javascript"}));
+  }catch(err){
+    console.error("Couldn't fetch the PDF.js worker script; falling back to the direct URL.", err);
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+})();
+
+const $ = id => document.getElementById(id);
+const FILE_VERSION = 2;
+
+/* One source of truth for the name and revision. These get stamped into every
+   saved record, so drift here means files claiming to come from a build that
+   never existed. A test keeps the toolbar markup in step. */
+const APP_NAME = "Balloon";
+const APP_REV = 3;
+const APP_ID = APP_NAME + " rev " + APP_REV;
+
+/* ============================ state ============================
+   Two objects with different lifetimes, merged into S.balloons for editing:
+
+     layout  — balloons, requirements, tolerances. Belongs to part + rev.
+               Made once, reused for every unit.
+     record  — actuals, notes, who, when. Belongs to one unit ID.
+               Made N times against one layout.
+
+   S.balloons is the working merge (layout char + this unit's result).
+   split() and adopt() convert between the merge and the on-disk shape.
+============================================================== */
+const S = {
+  doc:null, bytes:null, name:"", pages:0, pg:1, zoom:1, fitZoom:1,
+  mode:"balloon", view:"layout", filter:"all",
+  cache:new Map(), sel:null, rendering:false,
+
+  layout: {
+    version:1, source:"", pages:0,
+    part:{partNo:"", partName:"", rev:"", dwgNo:""},
+    unitLabel:"Serial No.", unitPattern:"",
+    drawing:{file:"", sha256:"", pages:0},
+    next:1
+  },
+  record: newRecord(),
+  balloons: [],
+  log: [],          // units completed this session
+  savedSig: "", savedAt: null,
+  job: {version:null, records:0, publishedSig:null},
+  recall: null,        // a remembered folder we haven't been let back into yet
+  tbOpen: true,
+  role: "planner", parts: [], picking: false,
+  pendingDraft: null,
+  revising:false    // layout unlocked on purpose
+};
+
+function newRecord(){
+  return {
+    unitId:"", seq:1, rework:false, order:"", inspector:"", date:"",
+    layoutVersion:null, started:null,
+    status:"", disposition:""
+  };
+}
+
+const METHODS = ["","Caliper","Micrometer","Height gage","Pin gage","Thread gage","Gage block","CMM","Optical comparator","Surface finish","Visual","Functional gage","Other"];
+const LAYOUT_KEYS = ["id","num","page","ax","ay","bx","by","req","nom","up","lo","method"];
+
+/* ============================ toast ============================ */
+let toastT;
+function say(msg, ms){
+  const t = $("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(()=>t.hidden=true, ms||3400);
+}
+
+/* ============================ lock ============================ */
+function hasResults(){
+  return S.balloons.some(b => (b.actual||"") !== "" || (b.note||"") !== "");
+}
+function locked(){
+  if(isOperator()) return true;      // the spec is not the operator's to touch
+  return hasResults() && !S.revising;
+}
+/* Flip the already-rendered rows between editable and read-only without
+   rebuilding them — a repaint here would yank focus out from under whoever
+   is mid-keystroke in the Actual field. */
+function applyLock(){
+  const lk = locked();
+  document.querySelectorAll("#list .row").forEach(row=>{
+    row.querySelectorAll('.req,[data-k="nom"],[data-k="up"],[data-k="lo"]')
+       .forEach(el=>{ el.readOnly = lk; });
+    const sel = row.querySelector('[data-k="method"]');
+    if(sel) sel.disabled = lk;
+    const kill = row.querySelector(".kill");
+    if(kill){
+      kill.disabled = lk;
+      kill.title = lk ? "Layout is locked" : "Remove characteristic";
+    }
+  });
+}
+
+function paintLock(){
+  const bar = $("lockbar"), on = locked() && S.view === "layout";
+  bar.hidden = !on;
+  stage.classList.toggle("pan", S.view==="inspect" || S.mode==="pan" || locked());
+  if(on){
+    const n = S.balloons.filter(b=>(b.actual||"")!=="").length;
+    const who = S.record.unitId ? `<b>${esc(S.record.unitId)}</b>` : "an unnamed unit";
+    $("lockmsg").innerHTML =
+      `Layout is locked — ${n} result${n===1?"":"s"} recorded against ${who} on layout v${S.layout.version}. ` +
+      `Revising bumps the layout version and leaves earlier records pointing at the old one.`;
+  }
+  $("layVer").textContent = "layout v" + S.layout.version + (S.revising ? " · revising" : "");
+}
+$("revise").onclick = ()=>{
+  S.layout.version++;
+  S.revising = true;
+  say(`Layout is now v${S.layout.version}. Results already taken stay stamped v${S.layout.version-1} — re-measure anything you change.`, 7000);
+  paintLock(); paintList();
+};
+
+/* ============================ the job folder ============================
+   Everything for one part lives in one folder on the share:
+
+     drawing/   the master PDFs, stored once, never rewritten
+     layout/    v1.json, v2.json …  append-only; highest number is current
+     records/   one small file per unit
+     exports/   generated, disposable
+
+   Store wraps a FileSystemDirectoryHandle and nothing else, so the tests can
+   hand it an in-memory fake and exercise every path without a browser.
+====================================================================== */
+const DIRS = {drawing:"drawing", layout:"layout", records:"records", exports:"exports"};
+
+const Store = {
+  root:null, name:"",              // the part folder we're working in
+  rootDir:null, rootName:"",       // the inspection folder that holds them all
+
+  get attached(){ return !!this.root; },
+  get supported(){ return typeof self !== "undefined" && "showDirectoryPicker" in self; },
+
+  async attach(handle){
+    this.root = handle;
+    this.name = handle.name || "job";
+    // deliberately does NOT create the subfolders — writing does that, so
+    // merely looking at a folder never leaves anything behind in it
+  },
+  detach(){ this.root = null; this.name = ""; },
+  detachAll(){ this.detach(); this.rootDir = null; this.rootName = ""; },
+
+  async dir(key, create){
+    if(!this.root) throw new Error("no job folder attached");
+    return this.root.getDirectoryHandle(DIRS[key], {create: !!create});
+  },
+  async ensure(){
+    for(const k of Object.keys(DIRS)) await this.dir(k, true);
+  },
+
+  async list(key, ext){
+    let d;
+    try{ d = await this.dir(key); }catch(e){ return []; }
+    const out = [];
+    for await (const entry of d.entries()){
+      const [nm, h] = entry;
+      if(h.kind === "file" && (!ext || nm.toLowerCase().endsWith(ext))) out.push(nm);
+    }
+    return out.sort();
+  },
+  async exists(key, name){
+    try{ const d = await this.dir(key); await d.getFileHandle(name); return true; }
+    catch(e){ return false; }
+  },
+  async readText(key, name){
+    const d = await this.dir(key);
+    return (await (await d.getFileHandle(name)).getFile()).text();
+  },
+  async readBytes(key, name){
+    const d = await this.dir(key);
+    return (await (await d.getFileHandle(name)).getFile()).arrayBuffer();
+  },
+  async write(key, name, data){
+    const d = await this.dir(key, true);
+    const h = await d.getFileHandle(name, {create:true});
+    const w = await h.createWritable();
+    await w.write(data);
+    await w.close();
+  },
+
+  /* ---- layouts are versioned files, never overwritten ---- */
+  async layoutVersions(){
+    return (await this.list("layout", ".json"))
+      .map(nm => ({name:nm, v: parseInt((nm.match(/^v(\d+)\.json$/i) || [])[1], 10)}))
+      .filter(o => isFinite(o.v))
+      .sort((a,b) => a.v - b.v);
+  },
+  async readLayout(v){
+    const all = await this.layoutVersions();
+    const hit = v == null ? all[all.length-1] : all.find(o => o.v === v);
+    if(!hit) return null;
+    return JSON.parse(await this.readText("layout", hit.name));
+  },
+  async publishLayout(obj){
+    const all = await this.layoutVersions();
+    const next = all.length ? all[all.length-1].v + 1 : 1;
+    const out = Object.assign({}, obj, {version: next, published: new Date().toISOString()});
+    await this.write("layout", "v" + next + ".json", JSON.stringify(out, null, 2));
+    return next;
+  },
+
+  /* ---- one file per unit; a re-inspection is its own file ---- */
+  async listRecords(){
+    const names = await this.list("records", ".json");
+    const out = [];
+    for(const nm of names){
+      try{
+        const j = JSON.parse(await this.readText("records", nm));
+        out.push({file:nm, unitId:j.unitId||"", seq:j.seq||1, rework:!!j.rework,
+                  date:j.date||"", inspector:j.inspector||"",
+                  layoutVersion:j.layoutVersion, results:j.results||{}});
+      }catch(e){ /* not one of ours; leave it alone */ }
+    }
+    return out;
+  },
+  async readRecord(file){ return JSON.parse(await this.readText("records", file)); },
+  async writeRecord(obj){
+    const nm = recordName(obj.unitId, obj.seq);
+    await this.write("records", nm, JSON.stringify(obj, null, 2));
+    return nm;
+  },
+
+  /* Is this one part, or the folder that holds them all? Decided by what's
+     inside, never by who's asking. */
+  async classify(handle){
+    if((await this.peek(handle)).job) return "part";
+    try{
+      for await (const entry of handle.entries()){
+        if(entry[1].kind !== "directory") continue;
+        if((await this.peek(entry[1])).job) return "root";
+      }
+    }catch(e){ return "unreadable"; }
+    return "empty";
+  },
+
+  /* ---- the root: one grant covers every part on the share ---- */
+  async attachRoot(handle){
+    this.rootDir = handle;
+    this.rootName = handle.name || "inspection";
+    this.root = null; this.name = "";
+  },
+  get hasRoot(){ return !!this.rootDir; },
+
+  async parts(){
+    if(!this.rootDir) return [];
+    const out = [];
+    for await (const entry of this.rootDir.entries()){
+      const [nm, h] = entry;
+      if(h.kind !== "directory") continue;
+      out.push({name:nm, handle:h});
+    }
+    out.sort((a,b)=>a.name.localeCompare(b.name, undefined, {numeric:true}));
+    return out;
+  },
+  /* Cheap probe — is this folder one of ours, and how far along? Reads the
+     layout dir listing only, never the whole layout. */
+  async peek(handle){
+    const info = {job:false, version:null, records:0};
+    try{
+      const lay = await handle.getDirectoryHandle("layout");
+      info.job = true;              // the folder exists at all — this one is ours
+      const vs = [];
+      for await (const e of lay.entries()){
+        const m = e[0].match(/^v(\d+)\.json$/i);
+        if(m) vs.push(parseInt(m[1],10));
+      }
+      if(vs.length) info.version = Math.max.apply(null, vs);
+    }catch(e){}
+    try{
+      const rec = await handle.getDirectoryHandle("records");
+      for await (const e of rec.entries()) if(e[0].toLowerCase().endsWith(".json")) info.records++;
+      info.job = true;
+    }catch(e){}
+    return info;
+  },
+
+  /* ---- the master drawing ---- */
+  async putDrawing(name, bytes){
+    if(await this.exists("drawing", name)) return name;   // never rewrite a master
+    await this.write("drawing", name, bytes);
+    return name;
+  }
+};
+
+function slug(s){
+  return String(s || "unit").trim().replace(/[^\w.\-]+/g, "_").replace(/^_+|_+$/g, "") || "unit";
+}
+function recordName(unitId, seq){
+  return slug(unitId) + ((seq || 1) > 1 ? "_r" + seq : "") + ".json";
+}
+async function sha256(buf){
+  const d = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/* Remember the folder between sessions. Chrome can persist a directory handle
+   in IndexedDB; permission still has to be re-granted, but the user picks from
+   a name instead of navigating the share again. Entirely optional — every
+   failure here is swallowed, because none of it is load-bearing. */
+const Handles = {
+  async db(){
+    return new Promise((res, rej) => {
+      if(typeof indexedDB === "undefined") return rej(new Error("no indexedDB"));
+      const r = indexedDB.open("balloon", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("handles");
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  },
+  async tx(mode, fn){
+    const db = await this.db();
+    return new Promise((res, rej) => {
+      const t = db.transaction("handles", mode);
+      const rq = fn(t.objectStore("handles"));
+      t.oncomplete = () => res(rq && rq.result);
+      t.onerror = () => rej(t.error);
+    });
+  },
+  async remember(handle){
+    try{ await this.tx("readwrite", st => st.put(handle, "last")); }catch(e){}
+  },
+  async last(){
+    try{ return await this.tx("readonly", st => st.get("last")); }catch(e){ return null; }
+  },
+  async forget(){
+    try{ await this.tx("readwrite", st => st.delete("last")); }catch(e){}
+  }
+};
+
+/* ============================ save state ============================
+   Nothing here writes to disk by itself — a page can't. What it does is
+   make "there's work in this tab that isn't on disk" impossible to miss,
+   and put a stop in front of the accidental tab close. The signature is
+   compared rather than a flag being set, so undoing a change goes back to
+   clean instead of nagging forever.
+====================================================================== */
+function sig(){
+  if(!S.balloons.length && !S.record.unitId) return "";
+  const o = fileObject(true);
+  o.meta = null;                        // written timestamp changes every call
+  if(o.record){
+    // clock marks, not content — otherwise typing a value and deleting it
+    // again would leave the tab looking dirty forever
+    o.record.completed = null;
+    o.record.started = null;
+  }
+  return JSON.stringify(o);
+}
+function dirty(){ return sig() !== S.savedSig; }
+function markSaved(){
+  S.savedSig = sig();
+  S.savedAt = new Date();
+  paintSave();
+}
+function hhmm(d){
+  return d ? String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0") : "";
+}
+function paintSave(){
+  paintJob(); paintProgress();
+  Cache.schedule();
+  const box = $("savestate"), txt = $("savetext");
+  if(!S.balloons.length){ box.hidden = true; return; }
+  box.hidden = false;
+  const d = dirty();
+  box.classList.toggle("unsaved", d);
+  box.classList.toggle("clean", !d);
+  if(d){
+    const n = S.balloons.filter(b=>(b.actual||"")!=="").length;
+    txt.textContent = "unsaved";
+    box.title = S.savedAt
+      ? `${n} result${n===1?"":"s"} on screen. Last full save was ${hhmm(S.savedAt)} — anything since then exists only in this tab.`
+      : "Nothing saved yet. Export \u2192 Save inspection (.json) writes it to disk.";
+  } else {
+    txt.textContent = "saved " + hhmm(S.savedAt);
+    box.title = "Everything on screen is in the last saved inspection file.";
+  }
+}
+
+window.addEventListener("beforeunload", e=>{
+  if(!S.balloons.length || !dirty()) return;
+  e.preventDefault();
+  e.returnValue = "";        // browsers show their own wording; this just arms it
+});
+
+/* ============================ the unit tag ============================ */
+function paintTag(){
+  const r = S.record;
+  $("u_label").value = S.layout.unitLabel;
+  $("u_id").value = r.unitId;
+  $("u_id").placeholder = "not set";
+  $("tag").classList.toggle("set", !!r.unitId);
+  $("u_seq").hidden = r.seq <= 1;
+  $("u_seq").textContent = "#" + r.seq;
+  $("u_rework").setAttribute("aria-pressed", String(!!r.rework));
+  checkUnit(false);
+}
+
+function checkUnit(announce){
+  const w = $("u_warn"), id = S.record.unitId.trim();
+  const pat = (S.layout.unitPattern||"").trim();
+  let msg = "";
+  if(id && pat){
+    let re = null;
+    try{ re = new RegExp("^(?:"+pat+")$"); }catch(e){ /* bad pattern, ignore */ }
+    if(re && !re.test(id)) msg = `Doesn't match the ID format for this part (${pat}). Saved anyway.`;
+  }
+  // Duplicates are handled in the id's change handler, which can reach the
+  // job folder; this one only knows about the format.
+  w.textContent = msg; w.hidden = !msg;
+  if(msg && announce) say(msg, 5200);
+}
+
+$("u_label").onchange = e=>{ S.layout.unitLabel = e.target.value; paintSave(); };
+$("u_id").oninput = e=>{ S.record.unitId = e.target.value; $("tag").classList.toggle("set", !!e.target.value.trim()); paintSave(); };
+$("u_id").onchange = async ()=>{
+  const id = S.record.unitId.trim();
+  const prior = await priorUnits(id);
+  if(id && prior.length){
+    S.record.seq = Math.max(...prior.map(p=>p.seq||1)) + 1;
+    S.record.rework = true;
+    paintTag();          // repaints the chips — and resets the warning line,
+                         // so the message has to be written after it, not before
+    const msg = `${id} has been inspected ${prior.length} time` +
+                `${prior.length===1?"":"s"} already` +
+                (Store.attached ? " in this job folder" : " this session") +
+                `. Recording as inspection #${S.record.seq}.`;
+    $("u_warn").textContent = msg;
+    $("u_warn").hidden = false;
+    say(msg, 6000);
+    return;
+  }
+  paintTag();
+  checkUnit(true);
+};
+$("u_rework").onclick = ()=>{
+  S.record.rework = !S.record.rework;
+  $("u_rework").setAttribute("aria-pressed", String(S.record.rework));
+};
+$("h_pattern").oninput = e=>{ S.layout.unitPattern = e.target.value; checkUnit(false); paintSave(); };
+
+$("u_new").onclick = ()=>{
+  if(!S.balloons.length) return say("Balloon the drawing first — there's nothing to inspect yet.");
+  const done = S.balloons.filter(b=>(b.actual||"")!=="").length;
+  const risk = dirty()
+    ? "These results have NOT been saved to disk. Clearing them loses them for good."
+    : "They're already saved to disk, so this only clears the screen.";
+  if(done && !confirm(
+      `Close out ${S.record.unitId || "this unit"} and start the next one?\n\n` +
+      `${done} of ${S.balloons.length} results will be cleared.\n${risk}`)) return;
+  if(done) logUnit();
+  S.record = newRecord();
+  S.record.inspector = $("h_insp").value;
+  S.record.date = today();
+  S.balloons.forEach(b=>{ b.actual=""; b.note=""; });
+  S.revising = false;
+  $("h_date").value = S.record.date;
+  $("h_order").value = "";
+  paintTag(); paintLock(); drawBalloons(); paintList();
+  $("u_id").focus();
+  say("Fresh record on the same layout. Enter the next unit ID.", 4200);
+};
+
+function logUnit(){
+  const done = S.balloons.filter(b=>(b.actual||"")!=="").length;
+  const bad  = S.balloons.filter(b=>verdict(b)===false).length;
+  S.log.push({
+    unitId: S.record.unitId || "(unnamed)", seq: S.record.seq, rework: S.record.rework,
+    label: S.layout.unitLabel, order: S.record.order, inspector: S.record.inspector,
+    date: S.record.date, layoutVersion: S.record.layoutVersion || S.layout.version,
+    total: S.balloons.length, done, bad,
+    result: bad ? "REJECT" : (done === S.balloons.length ? "ACCEPT" : "INCOMPLETE"),
+    when: new Date().toISOString()
+  });
+}
+
+function today(){ return new Date().toISOString().slice(0,10); }
+
+/* ============================ role ============================
+   Two people use this app and they need different things from it. The planner
+   builds the layout and can change anything; the operator measures parts and
+   must not be able to change the spec by accident. The role is a deployment
+   decision — a shortcut on the floor PCs carries ?role=operator, and it sticks
+   on that machine — not a toggle anyone can flip mid-shift.
+============================================================== */
+const Prefs = {
+  async get(k){
+    try{ return await Handles.tx("readonly", st => st.get("pref:" + k)); }catch(e){ return null; }
+  },
+  async set(k, v){
+    try{ await Handles.tx("readwrite", st => st.put(v, "pref:" + k)); }catch(e){}
+  }
+};
+
+function isOperator(){ return S.role === "operator"; }
+
+function applyRole(){
+  document.body.classList.toggle("operator", isOperator());
+  if(isOperator()){
+    setView("inspect");
+    setMode("pan");
+  }
+  paintJob(); paintProgress();
+}
+
+async function initRole(){
+  let role = null;
+  try{
+    const q = new URLSearchParams(location.search);
+    role = q.get("role") || (location.hash === "#operator" ? "operator" : null);
+  }catch(e){}
+  if(role === "operator" || role === "planner"){
+    await Prefs.set("role", role);          // the shortcut only has to be used once
+  }else{
+    role = await Prefs.get("role");
+  }
+  S.role = role === "operator" ? "operator" : "planner";
+  applyRole();
+}
+
+/* ============================ alerts ============================
+   Toasts are wrong for failure. Someone with their eyes on a bore gage misses
+   a four-second message entirely, and then believes the part was saved.
+============================================================== */
+function alertOn(msg, actionLabel, fn){
+  $("alertmsg").textContent = msg;
+  const b = $("alertAct");
+  b.hidden = !actionLabel;
+  if(actionLabel){ b.textContent = actionLabel; b.onclick = fn; }
+  $("alert").hidden = false;
+}
+function alertOff(){
+  $("alert").hidden = true;
+  $("alertAct").hidden = true;
+  if(S.pendingDraft){ S.pendingDraft = null; Cache.clear(); }  // dismissing a draft discards it
+}
+$("alertx").onclick = alertOff;
+
+/* Failures speak loudly and stay put; everything else is a toast. */
+function trouble(msg){ alertOn(msg); say(msg, 7000); }
+
+/* ============================ crash cache ============================
+   A page can't write to the share on its own, and the share can drop. This
+   keeps a copy of the working record in IndexedDB — local to the machine,
+   written a few hundred milliseconds after each change, deleted the moment the
+   real record lands in the folder. It is a safety net, never the record.
+====================================================================== */
+const Cache = {
+  timer:null,
+
+  key(){ return "draft:" + (Store.attached ? Store.name : "__local__"); },
+
+  worthKeeping(){
+    return S.balloons.some(b => (b.actual||"") !== "" || (b.note||"") !== "")
+        || !!S.record.unitId.trim();
+  },
+
+  schedule(){
+    clearTimeout(this.timer);
+    this.timer = setTimeout(()=>this.write(), 400);
+  },
+
+  async write(){
+    const k = this.key();
+    try{
+      if(!this.worthKeeping()){
+        // A draft is on screen waiting for an answer, and the screen is empty
+        // precisely because it hasn't been restored yet. Deleting here would
+        // erase the thing the banner is offering, ~400ms after it appeared.
+        if(S.pendingDraft) return;
+        await Handles.tx("readwrite", st => st.delete(k));
+        return;
+      }
+      await Handles.tx("readwrite", st => st.put({
+        folder: Store.attached ? Store.name : "",
+        layoutVersion: S.layout.version,
+        partNo: S.layout.part.partNo || "",
+        ids: S.balloons.map(b => b.id),
+        record: fileObject(true).record,
+        when: new Date().toISOString()
+      }, k));
+    }catch(e){ /* private mode, quota, blocked db — never load-bearing */ }
+  },
+
+  async read(){
+    try{ return await Handles.tx("readonly", st => st.get(this.key())); }
+    catch(e){ return null; }
+  },
+
+  async clear(){
+    clearTimeout(this.timer);
+    try{ await Handles.tx("readwrite", st => st.delete(this.key())); }catch(e){}
+  }
+};
+
+function clockOf(iso){
+  try{
+    const d = new Date(iso);
+    return String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+  }catch(e){ return "earlier"; }
+}
+
+/* Offered, never applied on its own — a draft is by definition work whose
+   status nobody has confirmed. */
+async function offerDraft(){
+  const d = await Cache.read();
+  if(!d || !d.record) return false;
+  const n = Object.keys(d.record.results || {}).length;
+  if(!n && !(d.record.unitId || "").trim()) return false;
+
+  S.pendingDraft = d;
+  const who = (d.record.unitId || "").trim() || "no unit ID";
+  const stale = d.layoutVersion != null && d.layoutVersion !== S.layout.version
+    ? ` It was taken against layout v${d.layoutVersion}; this folder is now on v${S.layout.version}.`
+    : "";
+  alertOn(
+    `Unsaved work from ${clockOf(d.when)} — ${who}, ${n} reading${n===1?"":"s"}. ` +
+    `It never reached the folder.${stale}`,
+    "Restore it", ()=>restoreDraft());
+  return true;
+}
+
+function restoreDraft(){
+  const d = S.pendingDraft;
+  if(!d) return;
+  const R = d.record || {};
+  ["unitId","seq","rework","order","inspector","date","status","disposition"].forEach(k=>{
+    if(R[k] !== undefined) S.record[k] = R[k];
+  });
+  S.record.layoutVersion = R.layoutVersion == null ? null : R.layoutVersion;
+  S.record.started = R.started || null;
+
+  let landed = 0, lost = 0;
+  const byId = new Map(S.balloons.map(b => [b.id, b]));
+  Object.keys(R.results || {}).forEach(id=>{
+    const b = byId.get(id);
+    if(!b){ lost++; return; }
+    b.actual = R.results[id].actual || "";
+    b.note = R.results[id].note || "";
+    landed++;
+  });
+
+  S.pendingDraft = null;
+  $("alertAct").hidden = true;
+  $("alert").hidden = true;
+  paintHeader(); paintTag(); drawBalloons(); paintList(); paintProgress();
+
+  if(lost){
+    alertOn(`Restored ${landed} reading${landed===1?"":"s"}. ${lost} couldn't be placed — ` +
+            `those characteristics are no longer in the layout. Check the part before saving.`);
+  }else{
+    say(`Restored ${landed} reading${landed===1?"":"s"}${S.record.unitId ? " for " + S.record.unitId : ""}. Not saved yet.`, 6000);
+  }
+}
+
+/* ============================ the part picker ============================ */
+async function openRoot(){
+  if(!Store.supported)
+    return trouble("This browser can't open the inspection folder. Use Chrome.");
+  let handle;
+  try{ handle = await self.showDirectoryPicker({mode:"readwrite", id:"balloon-root"}); }
+  catch(e){ return; }
+  await attachRoot(handle);
+}
+
+async function attachRoot(handle){
+  try{
+    await Store.attachRoot(handle);
+    await Handles.remember(handle);
+    await Prefs.set("rootName", Store.rootName);
+    S.recall = null;
+    alertOff();
+    await showParts();
+  }catch(err){
+    console.error(err);
+    Store.detachAll();
+    trouble("Couldn't read that folder. Pick the inspection folder that holds the part folders.");
+  }
+  paintJob();
+}
+
+async function showParts(){
+  let list = [];
+  try{ list = await Store.parts(); }
+  catch(e){ return trouble("Couldn't list the parts in that folder."); }
+
+  S.parts = [];
+  for(const p of list){
+    const info = await Store.peek(p.handle);
+    S.parts.push(Object.assign({}, p, info));
+  }
+  S.picking = true;
+  paintParts();
+  paintJob();
+  if(!S.parts.length)
+    say(`Nothing in ${Store.rootName} yet. Each part needs its own folder.`, 7000);
+}
+
+function paintParts(){
+  const box = $("parts"), filt = $("partFilter");
+  box.hidden = !S.picking;
+  filt.hidden = !S.picking;
+  if(!S.picking) return;
+
+  const q = ($("partSearch").value || "").trim().toLowerCase();
+  const rows = S.parts.filter(p => !q || p.name.toLowerCase().includes(q));
+  box.innerHTML = "";
+  if(!rows.length){
+    box.innerHTML = `<div class="empty"><strong>${S.parts.length ? "No part matches that." : "No part folders here."}</strong>
+      ${S.parts.length ? "Clear the search to see them all." : "Each part needs its own folder inside the one you picked."}</div>`;
+    return;
+  }
+  for(const p of rows){
+    const b = document.createElement("button");
+    b.className = "part" + (p.job ? "" : " bare");
+    b.innerHTML = `<b>${esc(p.name)}</b><span>${
+      p.job ? (p.version ? "layout v" + p.version : "no layout") +
+              "  \u00b7  " + p.records + " unit" + (p.records === 1 ? "" : "s")
+            : "not set up"
+    }</span>`;
+    b.onclick = ()=>pickPart(p.name);
+    box.appendChild(b);
+  }
+}
+$("partSearch").oninput = ()=>paintParts();
+
+async function pickPart(name){
+  const hit = S.parts.find(p => p.name === name);
+  if(!hit) return;
+  S.picking = false;
+  paintParts();
+  alertOff();
+  if(await attachJob(hit.handle, true)){
+    if(isOperator()) $("u_id").focus();
+  }else{
+    S.picking = true; paintParts();
+    trouble(`Couldn't open ${name}. It may be read-only, or the share may have dropped.`);
+  }
+}
+
+function backToParts(){
+  Store.detach();
+  S.picking = true;
+  paintParts(); paintJob(); paintProgress();
+}
+
+/* ============================ progress ============================ */
+function paintProgress(){
+  const box = $("prog");
+  const on = isOperator() && Store.attached && S.balloons.length > 0;
+  box.hidden = !on;
+  if(!on) return;
+  const total = S.balloons.length;
+  const bad = S.balloons.filter(b => verdict(b) === false).length;
+  const good = S.balloons.filter(b => b.actual !== "" && verdict(b) !== false).length;
+  const done = good + bad;
+  $("progN").innerHTML = `<b>${done}</b> of ${total} measured`;
+  $("progBad").textContent = bad ? `${bad} out of tolerance` : "";
+  $("progOk").style.width = (good / total * 100) + "%";
+  $("progNo").style.width = (bad / total * 100) + "%";
+  const btn = $("opSave");
+  btn.textContent = done === 0 ? "Nothing measured yet"
+                  : done < total ? `Save part \u2014 ${total - done} still open`
+                  : "Save this part";
+  btn.disabled = done === 0;
+}
+$("opSave").onclick = ()=>operatorSave();
+
+/* ============================ the operator's save ============================
+   Three rules, settled with Brian:
+     · an out-of-tolerance reading can't be saved without a note
+     · an unfinished part can be saved, but is stamped INCOMPLETE
+     · a rejected part carries a free-text disposition
+============================================================== */
+function rejectsMissingNotes(){
+  return S.balloons.filter(b => verdict(b) === false && !(b.note || "").trim())
+                   .sort((a,b) => a.num - b.num);
+}
+
+async function operatorSave(){
+  if(!Store.attached) return trouble("No part folder open.");
+  if(!S.record.unitId.trim()){
+    alertOn(`Enter the ${S.layout.unitLabel.toLowerCase()} before saving.`);
+    $("u_id").focus();
+    return;
+  }
+
+  const open = rejectsMissingNotes();
+  if(open.length){
+    const nums = open.map(b => b.num).join(", ");
+    alertOn(`Characteristic ${nums} ${open.length === 1 ? "is" : "are"} out of tolerance. ` +
+            `Add a note saying what you found before saving.`);
+    setFilter("bad");
+    select(open[0].id, true);
+    const el = document.querySelector(`.row[data-id="${open[0].id}"] [data-k="note"]`);
+    if(el){ el.focus(); goTo(open[0]); }
+    return;
+  }
+
+  const total = S.balloons.length;
+  const done = S.balloons.filter(b => b.actual !== "").length;
+  const bad = S.balloons.filter(b => verdict(b) === false).length;
+
+  if(done < total && !confirm(
+      `${total - done} of ${total} characteristics have no reading.\n\n` +
+      `Save ${S.record.unitId} as INCOMPLETE? It can be finished later.`)) return;
+
+  if(bad){
+    const was = S.record.disposition || "";
+    const d = prompt(
+      `${S.record.unitId} has ${bad} characteristic${bad === 1 ? "" : "s"} out of tolerance.\n\n` +
+      `What happens to the part?`, was);
+    if(d === null) return;                       // cancelled
+    S.record.disposition = d.trim();
+  }
+
+  S.record.status = done < total ? "INCOMPLETE" : (bad ? "REJECT" : "ACCEPT");
+  alertOff();
+  await saveRecord();
+  paintProgress();
+}
+
+/* ============================ job folder UI ============================ */
+function layoutSig(){
+  const o = fileObject(false).layout;
+  o.version = null; o.published = null;   // publishing itself isn't a change
+  return JSON.stringify(o);
+}
+
+function paintJob(){
+  const nameEl = $("jobName"), stat = $("jobStat"), act = $("jobAct");
+  if(!Store.supported){
+    nameEl.textContent = "working from files";
+    nameEl.classList.add("off");
+    stat.textContent = "this browser can't open a job folder — use the Export menu";
+    $("jobOpen").hidden = true;
+    act.hidden = true;
+    $("jobBack").hidden = true;
+    return;
+  }
+  $("jobOpen").hidden = false;
+  $("jobOpen").textContent = Store.attached ? "Change\u2026" : "Open\u2026";
+  $("job").classList.toggle("on", Store.attached);
+
+  if(!Store.attached && Store.hasRoot){
+    nameEl.textContent = Store.rootName;
+    nameEl.classList.remove("off");
+    stat.textContent = S.parts.length
+      ? `${S.parts.length} part${S.parts.length===1?"":"s"} \u2014 choose one to start`
+      : "no part folders in here yet";
+    $("jobBack").hidden = true;
+    act.hidden = true;
+    return;
+  }
+  if(!Store.attached){
+    const back = $("jobBack");
+    nameEl.textContent = S.recall ? S.recall.name : "not connected";
+    nameEl.classList.toggle("off", !S.recall);
+    stat.textContent = S.recall
+      ? "last job \u2014 reconnect to load the layout and its records"
+      : "open a folder to load the layout and save results there";
+    back.hidden = !S.recall;
+    if(S.recall) back.textContent = "Reconnect to " + S.recall.name;
+    act.hidden = true;
+    return;
+  }
+  $("jobBack").hidden = true;
+  nameEl.textContent = Store.name;
+  nameEl.classList.remove("off");
+  stat.textContent = [
+    S.job.version ? "layout v" + S.job.version : "no layout published",
+    S.job.records + " unit" + (S.job.records === 1 ? "" : "s") + " recorded"
+  ].join("  \u00b7  ");
+
+  if(isOperator()){
+    // never offer to change the spec; offer the way back to the part list
+    act.hidden = !Store.hasRoot;
+    if(Store.hasRoot){ act.dataset.do = "parts"; act.textContent = "Choose another part"; }
+    return;
+  }
+  if(!S.balloons.length){
+    act.hidden = !Store.hasRoot;
+    if(Store.hasRoot){ act.dataset.do = "parts"; act.textContent = "Choose another part"; }
+    return;
+  }
+  if(S.job.publishedSig !== layoutSig()){
+    act.hidden = false;
+    act.dataset.do = "publish";
+    act.textContent = "Publish layout v" + ((S.job.version || 0) + 1);
+  } else if(hasResults()){
+    act.hidden = false;
+    act.dataset.do = "save";
+    act.textContent = "Save results to folder";
+  } else {
+    act.hidden = true;
+  }
+}
+
+$("jobOpen").onclick = ()=>Store.hasRoot && !Store.attached ? openRoot() : openJob();
+$("jobAct").onclick = ()=>{
+  const what = $("jobAct").dataset.do;
+  if(what === "publish") publishJob();
+  else if(what === "save") saveRecord();
+  else if(what === "parts") backToParts();
+};
+
+async function openJob(){
+  if(!Store.supported)
+    return say("This browser can't open a job folder. Use Chrome, or keep working with files from the Export menu.", 6500);
+  let handle;
+  try{
+    handle = await self.showDirectoryPicker({mode:"readwrite", id:"balloon-job"});
+  }catch(e){ return; }                      // the picker was cancelled
+  await openFolder(handle);
+}
+
+/* Whatever gets picked, work out what it is before touching it. Picking the
+   inspection folder used to silently turn it into a part folder. */
+async function openFolder(handle){
+  let kind;
+  try{ kind = await Store.classify(handle); }
+  catch(e){ kind = "unreadable"; }
+
+  if(kind === "unreadable")
+    return trouble(`Couldn't read ${handle.name}. Check the share is reachable and the folder isn't restricted.`);
+
+  if(kind === "root") return attachRoot(handle);
+
+  if(kind === "empty"){
+    const holds = confirm(
+      `${handle.name} is empty.\n\n` +
+      `OK — set it up as a single part, and write drawing/, layout/ and records/ into it.\n\n` +
+      `Cancel — it's meant to hold one folder per part, and they haven't been made yet.`);
+    if(!holds) return attachRoot(handle);
+  }
+
+  if(await attachJob(handle)) S.recall = null;
+  paintJob();
+}
+
+async function attachJob(handle, quiet){
+  let ok = false;
+  try{
+    await Store.attach(handle);
+    await Handles.remember(handle);
+    await loadFromStore();
+    ok = true;
+  }catch(err){
+    console.error(err);
+    Store.detach();
+    if(!quiet) say("Couldn't open that folder. Check you picked the job folder itself and that it isn't read-only.", 7000);
+  }
+  paintJob();
+  return ok;
+}
+
+/* Chrome can hold on to a directory handle between sessions, but it always
+   makes the user re-grant access with a click. That click should land on a
+   button that already knows the folder, not send anyone back through the
+   share. */
+async function perm(handle, request){
+  if(!handle) return "denied";
+  const opts = {mode:"readwrite"};
+  try{
+    if(handle.queryPermission){
+      const st = await handle.queryPermission(opts);
+      if(st === "granted") return "granted";
+      if(!request) return st;
+    }
+    if(request && handle.requestPermission) return await handle.requestPermission(opts);
+    return handle.queryPermission || handle.requestPermission ? "prompt" : "granted";
+  }catch(e){ return "denied"; }
+}
+
+async function restoreJob(){
+  if(!Store.supported || Store.attached) return;
+  let h = null;
+  try{ h = await Handles.last(); }catch(e){ return; }
+  if(!h) return;
+  S.recall = {handle:h, name:h.name || "last job"};
+  if(await perm(h, false) === "granted"){
+    // still permitted — a soft reload, so just pick up where we were
+    if(await reattach(h)) S.recall = null;
+    else await Handles.forget();
+  }
+  paintJob();
+}
+
+async function reconnectJob(){
+  const r = S.recall;
+  if(!r) return;
+  if(await perm(r.handle, true) !== "granted")
+    return say("Chrome didn't grant access to that folder. Use Open\u2026 to pick it again.", 6500);
+  if(await reattach(r.handle)){
+    S.recall = null;
+  }else{
+    await Handles.forget();
+    S.recall = null;
+    say(`${r.name} isn't reachable any more — it may have been moved, renamed, or the share dropped. Use Open\u2026 to pick it again.`, 8000);
+  }
+  paintJob();
+}
+$("jobBack").onclick = ()=>reconnectJob();
+
+/* A remembered handle might be one part folder or the inspection folder that
+   holds them all. Probe it rather than guessing. */
+async function reattach(handle){
+  try{
+    // Is the folder actually there? peek() swallows its own errors, so a
+    // vanished folder would otherwise look like an empty one and get adopted
+    // as a root.
+    await handle.entries().next();
+  }catch(e){ return false; }
+  try{
+    const kind = await Store.classify(handle);
+    if(kind === "unreadable") return false;
+    if(kind === "part") return attachJob(handle, true);
+    await Store.attachRoot(handle);
+    await showParts();
+    return true;
+  }catch(e){ console.error(e); return false; }
+}
+
+async function loadFromStore(){
+  const lay = await Store.readLayout();
+  S.job.records = (await Store.listRecords()).length;
+
+  if(!lay){
+    S.job.version = null;
+    S.job.publishedSig = null;
+    say(`Connected to ${Store.name}. Nothing published yet — open the drawing, balloon it, then publish.`, 7000);
+    return;
+  }
+
+  let mismatch = false;
+  if(lay.drawing && lay.drawing.file){
+    try{
+      const bytes = await Store.readBytes("drawing", lay.drawing.file);
+      await loadBytes(bytes, lay.drawing.file);
+      if(lay.drawing.sha256 && (await sha256(bytes)) !== lay.drawing.sha256) mismatch = true;
+    }catch(e){
+      console.error(e);
+      say(`Layout v${lay.version} loaded, but ${lay.drawing.file} isn't in the drawing folder. Open the print yourself to see the balloons.`, 8000);
+    }
+  }
+
+  adopt({v:FILE_VERSION, layout:lay, record:null});
+  S.job.version = lay.version;
+  S.job.publishedSig = layoutSig();
+  setView("inspect");
+
+  if(await offerDraft()) return;      // unsaved work outranks the welcome message
+
+  if(mismatch){
+    say(`The drawing in this folder doesn't match the one layout v${lay.version} was built against. Someone has replaced it. Check the revision before measuring anything.`, 12000);
+  } else {
+    say(`${Store.name} — layout v${lay.version}, ${S.balloons.length} characteristics, ${S.job.records} unit${S.job.records===1?"":"s"} on file. Enter the unit ID to start.`, 7000);
+  }
+}
+
+async function publishJob(){
+  if(!Store.attached) return;
+  if(!S.balloons.length) return say("Nothing to publish — balloon the drawing first.");
+  try{
+    if(S.bytes && S.layout.drawing.file)
+      await Store.putDrawing(S.layout.drawing.file, new Blob([S.bytes.slice(0)]));
+
+    const v = await Store.publishLayout(fileObject(false).layout);
+    S.layout.version = v;
+    S.job.version = v;
+    S.revising = false;
+    S.job.publishedSig = layoutSig();
+    markSaved();
+    paintJob(); paintList();
+    say(`Published layout v${v}. Anyone opening ${Store.name} picks this up.`, 6000);
+  }catch(err){
+    console.error(err);
+    say("Couldn't write to the job folder. It may be read-only, or the share may have dropped.", 7000);
+  }
+}
+
+async function saveRecord(){
+  if(!Store.attached) return;
+  if(!S.record.unitId.trim()){
+    say(`Enter the ${S.layout.unitLabel.toLowerCase()} before saving.`);
+    $("u_id").focus();
+    return;
+  }
+  try{
+    const rec = fileObject(true).record;
+    rec.v = FILE_VERSION;
+    rec.kind = "balloon-record";
+    const nm = await Store.writeRecord(rec);
+    S.job.records = (await Store.listRecords()).length;
+    await Cache.clear();
+    markSaved();
+    paintJob();
+    say(`Saved ${nm} to ${Store.name}.`, 4600);
+  }catch(err){
+    console.error(err);
+    say("Couldn't write the record. The share may be read-only or unreachable — export it to a file instead.", 8000);
+  }
+}
+
+/* A unit ID already used anywhere in the folder, not just this tab. */
+async function priorUnits(id){
+  const key = String(id||"").trim().toLowerCase();
+  if(!key) return [];
+  const mine = S.log.filter(e => e.unitId.toLowerCase() === key)
+                    .map(e => ({unitId:e.unitId, seq:e.seq}));
+  if(!Store.attached) return mine;
+  try{
+    const recs = (await Store.listRecords()).filter(r => (r.unitId||"").toLowerCase() === key);
+    return recs.length ? recs : mine;      // the folder is the authority
+  }catch(e){ return mine; }
+}
+
+/* ============================ open ============================ */
+$("open").onclick = ()=>$("file").click();
+$("file").onchange = e => { if(e.target.files[0]) load(e.target.files[0]); e.target.value=""; };
+
+const stage = $("stage");
+["dragenter","dragover"].forEach(t=>stage.addEventListener(t,e=>{e.preventDefault();stage.classList.add("drop")}));
+["dragleave","drop"].forEach(t=>stage.addEventListener(t,e=>{e.preventDefault();stage.classList.remove("drop")}));
+stage.addEventListener("drop", e=>{
+  const f = e.dataTransfer.files[0];
+  if(!f) return;
+  if(/\.json$/i.test(f.name)) return readMarkup(f);
+  if(!/\.pdf$/i.test(f.name)) return say("Drop a .pdf drawing or a .json markup file here.");
+  load(f);
+});
+
+async function load(file){
+  return loadBytes(await file.arrayBuffer(), file.name);
+}
+
+async function loadBytes(buf, fileName){
+  try{
+    await workerReadyPromise;
+    S.bytes = buf.slice(0);
+    S.doc = await pdfjsLib.getDocument({
+      data:new Uint8Array(buf.slice(0)),
+      isEvalSupported:false            // keeps the offline build's CSP free of unsafe-eval
+    }).promise;
+    S.name = fileName;
+    S.pages = S.doc.numPages;
+    S.pg = 1; S.cache.clear();
+    S.layout.source = fileName;
+    S.layout.pages = S.pages;
+    S.layout.drawing = {file:fileName, sha256: await sha256(buf), pages:S.pages};
+    $("srcName").textContent = fileName;
+    $("hint").hidden = true; $("sheet").hidden = false;
+    ["prev","next","zin","zout","fit","renum"].forEach(i=>$(i).disabled=false);
+    if(!$("h_date").value){ $("h_date").value = today(); S.record.date = today(); }
+    await render(true);
+    paintJob();
+    say(S.pages>1 ? `Loaded ${fileName} — ${S.pages} sheets.` : `Loaded ${fileName}.`);
+  }catch(err){
+    console.error(err);
+    say("Couldn't read that PDF. It may be encrypted or damaged — try re-exporting it from the CAD system.", 6000);
+  }
+}
+
+/* ============================ render ============================ */
+async function pageData(n){
+  if(S.cache.has(n)) return S.cache.get(n);
+  const page = await S.doc.getPage(n);
+  const vp = page.getViewport({scale:1});
+  let items = [];
+  try{
+    const tc = await page.getTextContent();
+    items = tc.items.filter(i=>i.str && i.str.trim()).map(i=>{
+      const tx = pdfjsLib.Util.transform(vp.transform, i.transform);
+      const h = Math.hypot(tx[2],tx[3]) || Math.abs(i.height) || 8;
+      const dl = Math.hypot(tx[0],tx[1]) || 1;
+      const w = i.width || i.str.length*h*0.5;
+      // x,y is the baseline origin; u runs along the baseline, v is glyph "up"
+      return {str:i.str, x:tx[4], y:tx[5], w, h,
+              ux:tx[0]/dl, uy:tx[1]/dl, vx:tx[2]/h, vy:tx[3]/h};
+    });
+  }catch(e){ /* image-only sheet */ }
+  const d = {page, vp, items};
+  S.cache.set(n,d);
+  return d;
+}
+
+async function render(refit){
+  if(S.rendering) return;
+  S.rendering = true;
+  try{
+    const {page, vp} = await pageData(S.pg);
+    if(refit){
+      const avail = stage.clientWidth - 60;
+      S.fitZoom = Math.min(2.5, Math.max(.15, avail / vp.width));
+      S.zoom = S.fitZoom;
+    }
+    const dpr = Math.min(window.devicePixelRatio||1, 2);
+    const view = page.getViewport({scale:S.zoom});
+    const cv = $("pdf"), ctx = cv.getContext("2d",{alpha:false});
+    cv.width = Math.floor(view.width*dpr); cv.height = Math.floor(view.height*dpr);
+    cv.style.width = view.width+"px"; cv.style.height = view.height+"px";
+    ctx.fillStyle="#fff"; ctx.fillRect(0,0,cv.width,cv.height);
+
+    // A stuck render (worker never came up, browser refused to spin one up,
+    // whatever) used to leave S.rendering true forever — no error, no way to
+    // place another balloon, nothing on screen but a white sheet. Time it out.
+    const task = page.render({canvasContext:ctx, viewport:view, transform:dpr!==1?[dpr,0,0,dpr,0,0]:null});
+    const RENDER_TIMEOUT_MS = 15000;
+    let timedOut = false;
+    const timer = setTimeout(()=>{ timedOut = true; task.cancel(); }, RENDER_TIMEOUT_MS);
+    try{
+      await task.promise;
+    }catch(err){
+      if(timedOut){
+        say("This sheet is taking too long to render. Try Fit, or reload the page.", 6000);
+        return;
+      }
+      throw err;
+    }finally{
+      clearTimeout(timer);
+    }
+
+    const svg = $("ov");
+    svg.setAttribute("viewBox", `0 0 ${vp.width} ${vp.height}`);
+    $("pager").textContent = `${S.pg} / ${S.pages}`;
+    $("zread").textContent = Math.round(S.zoom*100)+"%";
+    drawBalloons();
+  } finally { S.rendering = false; }
+}
+
+let rT;
+function reflow(refit){ clearTimeout(rT); rT = setTimeout(()=>render(refit), 60); }
+window.addEventListener("resize", ()=>{ if(S.doc) reflow(false); });
+
+/* ============================ balloons on the sheet ============================ */
+function radius(){
+  const d = S.cache.get(S.pg);
+  if(!d) return 12;
+  return Math.max(8, Math.min(d.vp.width, d.vp.height)/62);
+}
+
+function drawBalloons(){
+  const svg = $("ov");
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+  const r = radius(), ins = S.view === "inspect";
+  for(const b of S.balloons){
+    if(b.page !== S.pg) continue;
+    const v = verdict(b);
+    const st = !ins ? "" : (" st-" + (v===true?"ok":v===false?"no":"open"));
+    const g = document.createElementNS("http://www.w3.org/2000/svg","g");
+    g.setAttribute("class","bub"+st+(S.sel===b.id?" sel":""));
+    g.dataset.id = b.id;
+
+    const ln = document.createElementNS("http://www.w3.org/2000/svg","line");
+    ln.setAttribute("class","leader"+st);
+    ln.setAttribute("x1",b.ax); ln.setAttribute("y1",b.ay);
+    ln.setAttribute("x2",b.bx); ln.setAttribute("y2",b.by);
+    svg.appendChild(ln);
+
+    const dot = document.createElementNS("http://www.w3.org/2000/svg","circle");
+    dot.setAttribute("class","anchor"+st);
+    dot.setAttribute("cx",b.ax); dot.setAttribute("cy",b.ay); dot.setAttribute("r",r*0.13);
+    svg.appendChild(dot);
+
+    const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
+    c.setAttribute("cx",b.bx); c.setAttribute("cy",b.by); c.setAttribute("r",r);
+    const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+    t.setAttribute("x",b.bx); t.setAttribute("y",b.by);
+    t.setAttribute("font-size",r*1.05);
+    t.textContent = b.num;
+    g.appendChild(c); g.appendChild(t);
+    svg.appendChild(g);
+  }
+}
+
+function svgPt(evt){
+  const svg = $("ov");
+  const p = svg.createSVGPoint();
+  p.x = evt.clientX; p.y = evt.clientY;
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+/* place / select / drag */
+let drag = null, panFrom = null;
+
+$("ov").addEventListener("pointerdown", e=>{
+  if(!S.doc) return;
+  const g = e.target.closest(".bub");
+
+  if(S.view === "inspect"){
+    if(g){ const b = S.balloons.find(x=>x.id===g.dataset.id); select(b.id); focusActual(b.id); return; }
+    panFrom = {x:e.clientX, y:e.clientY, l:stage.scrollLeft, t:stage.scrollTop};
+    stage.classList.add("grabbing");
+    $("ov").setPointerCapture(e.pointerId);
+    return;
+  }
+
+  if((S.mode==="pan" || locked()) && !g){
+    panFrom = {x:e.clientX, y:e.clientY, l:stage.scrollLeft, t:stage.scrollTop};
+    stage.classList.add("grabbing");
+    $("ov").setPointerCapture(e.pointerId);
+    return;
+  }
+  if(g){
+    const b = S.balloons.find(x=>x.id===g.dataset.id);
+    select(b.id);
+    if(locked()) return;
+    const p = svgPt(e);
+    drag = {b, dx:b.bx-p.x, dy:b.by-p.y, moved:false};
+    $("ov").setPointerCapture(e.pointerId);
+    return;
+  }
+  if(S.mode==="balloon"){ place(svgPt(e)); }
+  else { select(null); }
+});
+
+$("ov").addEventListener("pointermove", e=>{
+  if(panFrom){
+    stage.scrollLeft = panFrom.l - (e.clientX-panFrom.x);
+    stage.scrollTop  = panFrom.t - (e.clientY-panFrom.y);
+    return;
+  }
+  if(!drag) return;
+  const p = svgPt(e);
+  drag.b.bx = p.x + drag.dx; drag.b.by = p.y + drag.dy;
+  drag.moved = true;
+  drawBalloons();
+});
+
+function endPointer(){
+  if(drag && drag.moved) paintSave();
+  panFrom=null; drag=null; stage.classList.remove("grabbing");
+}
+$("ov").addEventListener("pointerup", endPointer);
+$("ov").addEventListener("pointercancel", endPointer);
+
+function place(p){
+  if(locked()){
+    say("Layout is locked because results have been entered. Use Revise layout to change it.", 5200);
+    return;
+  }
+  const d = S.cache.get(S.pg);
+  const r = radius();
+  const txt = $("grab").checked && d ? clusterAt(d.items, p.x, p.y) : "";
+  const parsed = parseReq(txt);
+  const b = {
+    id: "b"+Date.now()+Math.random().toString(36).slice(2,6),
+    num: S.layout.next++, page: S.pg,
+    ax:p.x, ay:p.y, bx:p.x + r*2.4, by:p.y - r*2.4,
+    req: txt,
+    nom: parsed.nom!=null?fmt(parsed.nom):"",
+    up:  parsed.up!=null?fmt(parsed.up):"",
+    lo:  parsed.lo!=null?fmt(parsed.lo):"",
+    actual:"", method:"", note:""
+  };
+  S.balloons.push(b);
+  drawBalloons();
+  const g = $("ov").querySelector(`.bub[data-id="${b.id}"]`);
+  if(g) g.classList.add("new");
+  paintList();
+  select(b.id, true);
+  const inp = document.querySelector(`.row[data-id="${b.id}"] .req`);
+  if(inp && !txt) inp.focus();
+}
+
+function select(id, noScroll){
+  S.sel = id;
+  drawBalloons(); paintList();
+  if(id && !noScroll){
+    const row = document.querySelector(`.row[data-id="${id}"]`);
+    if(row) row.scrollIntoView({block:"nearest"});
+  }
+}
+
+function remove(id){
+  if(locked()){
+    say("Layout is locked because results have been entered. Use Revise layout to change it.", 5200);
+    return;
+  }
+  S.balloons = S.balloons.filter(b=>b.id!==id);
+  if(S.sel===id) S.sel=null;
+  drawBalloons(); paintList();
+}
+
+/* ============================ text grabbing ============================ */
+function clusterAt(items, px, py){
+  if(!items.length) return "";
+  const pad = 3;
+
+  // project a point into an item's own baseline frame
+  const proj = (it,x,y) => {
+    const dx = x-it.x, dy = y-it.y;
+    return [dx*it.ux + dy*it.uy, dx*it.vx + dy*it.vy];
+  };
+
+  let seed = null;
+  for(const it of items){
+    const [u,v] = proj(it,px,py);
+    if(u>=-pad && u<=it.w+pad && v>=-0.35*it.h-pad && v<=0.95*it.h+pad){ seed = it; break; }
+  }
+  if(!seed){
+    let best=null, bd=Infinity;
+    for(const it of items){
+      const [u,v] = proj(it,px,py);
+      const cu = Math.max(0, Math.min(u, it.w));
+      const cv = Math.max(-0.3*it.h, Math.min(v, 0.9*it.h));
+      const d = Math.hypot(u-cu, v-cv);
+      if(d<bd){bd=d;best=it;}
+    }
+    if(bd > 24 || !best) return "";
+    seed = best;
+  }
+
+  // everything below is measured in the seed's frame, so rotated text works
+  const rel = it => {
+    const dx = it.x-seed.x, dy = it.y-seed.y;
+    return {u: dx*seed.ux + dy*seed.uy, v: dx*seed.vx + dy*seed.vy};
+  };
+  const parallel = it => (it.ux*seed.ux + it.uy*seed.uy) > 0.97;
+
+  const line = items.filter(it => parallel(it) && Math.abs(rel(it).v) < seed.h*0.5)
+                    .map(it => ({it, u: rel(it).u}))
+                    .sort((a,b)=>a.u-b.u);
+  const i = line.findIndex(o=>o.it===seed);
+  if(i<0) return seed.str.trim();
+
+  const gap = seed.h*1.2;
+  let lo=i, hi=i;
+  while(lo>0 && (line[lo].u - (line[lo-1].u + line[lo-1].it.w)) < gap) lo--;
+  while(hi<line.length-1 && (line[hi+1].u - (line[hi].u + line[hi].it.w)) < gap) hi++;
+  const cl = line.slice(lo,hi+1);
+
+  let out = "";
+  cl.forEach((o,k)=>{
+    if(k>0 && (o.u - (cl[k-1].u + cl[k-1].it.w)) > seed.h*0.24) out += " ";
+    out += o.it.str;
+  });
+  out = out.replace(/\s+/g," ").trim();
+
+  // a stacked bilateral half, but only ever + paired with - (never after ±)
+  const plus  = /\+\s*\.?\d[\d.]*$/.test(out);
+  const minus = /[-\u2212]\s*\.?\d[\d.]*$/.test(out) && !/\u00b1/.test(out);
+  if(plus || minus){
+    const uEnd = cl[cl.length-1].u + cl[cl.length-1].it.w;
+    const want = plus ? /^[-\u2212]/ : /^\+/;
+    const mate = items.filter(it=>{
+      if(!parallel(it) || cl.some(o=>o.it===it)) return false;
+      const r = rel(it), av = Math.abs(r.v);
+      return av > seed.h*0.6 && av < seed.h*2.4 &&
+             r.u > uEnd - seed.h*9 && r.u < uEnd + seed.h*2 &&
+             want.test(it.str.trim());
+    }).sort((a,b)=>Math.abs(rel(a).v)-Math.abs(rel(b).v));
+    if(mate.length) out += " " + mate[0].str.trim();
+  }
+  return out.replace(/\s+/g," ").trim();
+}
+
+/* ============================ tolerance parsing ============================ */
+const N = "(\\d*\\.?\\d+)";
+function parseReq(raw){
+  if(!raw) return {};
+  const s = raw.replace(/[\u2212\u2013\u2014]/g,"-").replace(/\s+/g," ")
+               .replace(/^\s*\d+\s*[Xx]\s+/,"").trim();   // drop a "4X " quantity prefix
+  let m;
+  if(/^\(.*\)$/.test(s)) return {};                                   // reference
+  if(/^\[.*\]$/.test(s)){ m = s.match(new RegExp(N)); return m?{nom:+m[1]}:{}; }  // basic
+  const U = "\\s*[^\\d\\s\\u00b1+\\-/]*\\s*";                          // trailing unit, e.g. ° or mm
+  m = s.match(new RegExp(N+U+"(?:\\u00b1|\\+\\/-|\\+-)\\s*"+N));       // 1.250 ±.005
+  if(m) return {nom:+m[1], up:+m[2], lo:-Math.abs(+m[2])};
+  const P = "\\s*[^\\d\\s\\u00b1+\\-]*\\s*";                           // separator, may include /
+  m = s.match(new RegExp(N+U+"\\+\\s*"+N+P+"-\\s*"+N));                // 1.250 +.010/-.005
+  if(m) return {nom:+m[1], up:+m[2], lo:-Math.abs(+m[3])};
+  m = s.match(new RegExp(N+U+"-\\s*"+N+P+"\\+\\s*"+N));                // 1.250 -.005/+.010
+  if(m) return {nom:+m[1], up:+m[3], lo:-Math.abs(+m[2])};
+  m = s.match(new RegExp("(?:^|[^\\d.])"+N+"\\s*\\/\\s*"+N+"\\s*$"));  // .500/.510 limits
+  if(m){
+    const a=+m[1], b=+m[2];
+    if(b>a){ const nom=(a+b)/2; return {nom, up:b-nom, lo:a-nom}; }
+  }
+  m = s.match(new RegExp(N));                                          // bare number
+  return m ? {nom:+m[1]} : {};
+}
+function fmt(v){
+  if(v==null || !isFinite(v)) return "";
+  return (Math.round(v*1e6)/1e6).toString();
+}
+function verdict(b){
+  const a = parseFloat(b.actual), n = parseFloat(b.nom);
+  const u = parseFloat(b.up), l = parseFloat(b.lo);
+  if(!isFinite(a) || !isFinite(n) || !isFinite(u) || !isFinite(l)) return null;
+  const lsl = n + Math.min(l,u), usl = n + Math.max(l,u);
+  return a >= lsl - 1e-9 && a <= usl + 1e-9;
+}
+
+/* ============================ list ============================ */
+function tallyText(){
+  const total = S.balloons.length;
+  if(!total) return "0 total";
+  const done = S.balloons.filter(b=>b.actual!=="").length;
+  const bad  = S.balloons.filter(b=>verdict(b)===false).length;
+  const base = S.view==="inspect"
+    ? `<b>${done}</b> of ${total} measured`
+    : `<b>${total}</b> total &nbsp;·&nbsp; ${done} measured`;
+  return base + (bad?` &nbsp;·&nbsp; <span style="color:var(--red-soft)">${bad} out</span>`:"");
+}
+
+function limits(b){
+  const n = parseFloat(b.nom), u = parseFloat(b.up), l = parseFloat(b.lo);
+  if(!isFinite(n)||!isFinite(u)||!isFinite(l)) return null;
+  return {lsl:n+Math.min(l,u), usl:n+Math.max(l,u), nom:n};
+}
+
+function bandHTML(b){
+  const L = limits(b), a = parseFloat(b.actual);
+  if(!L || L.usl<=L.lsl || !isFinite(a)) return "";
+  const pct = Math.max(0, Math.min(100, (a-L.lsl)/(L.usl-L.lsl)*100));
+  const ok = a >= L.lsl-1e-9 && a <= L.usl+1e-9;
+  return `<div class="band">
+      <div class="track"></div><div class="mid"></div>
+      <div class="tick ${ok?"ok":"no"}" style="left:${pct}%"></div>
+      <div class="cap l">${fmt(L.lsl)}</div><div class="cap r">${fmt(L.usl)}</div>
+    </div>`;
+}
+
+function visible(){
+  let list = S.balloons.slice().sort((a,b)=>a.num-b.num);
+  if(S.view==="inspect"){
+    if(S.filter==="open") list = list.filter(b=>b.actual==="");
+    if(S.filter==="bad")  list = list.filter(b=>verdict(b)===false);
+  }
+  return list;
+}
+
+function paintList(){
+  const wrap = $("list");
+  $("tally").innerHTML = tallyText();
+  paintLock(); paintSave();
+
+  if(!S.balloons.length){
+    wrap.innerHTML = S.view==="inspect"
+      ? `<div class="empty"><strong>Nothing to inspect yet.</strong>
+          Switch to <kbd>Lay out</kbd> and balloon the drawing first.</div>`
+      : `<div class="empty"><strong>No characteristics yet.</strong>
+          Click a dimension on the drawing to add one. Press <kbd>B</kbd> for balloon mode,
+          <kbd>V</kbd> to pan, <kbd>Del</kbd> to remove the selected balloon.</div>`;
+    return;
+  }
+
+  const rows = visible();
+  if(!rows.length){
+    wrap.innerHTML = `<div class="empty"><strong>${S.filter==="bad"?"Nothing out of tolerance.":"Every characteristic is measured."}</strong>
+      Switch the filter to All to see the rest.</div>`;
+    return;
+  }
+
+  wrap.innerHTML = "";
+  for(const b of rows) wrap.appendChild(S.view==="inspect" ? inspectRow(b) : layoutRow(b));
+}
+
+function shell(b){
+  const v = verdict(b);
+  const row = document.createElement("div");
+  row.className = "row" + (S.sel===b.id?" sel":"");
+  row.dataset.id = b.id;
+  return {row, v, stamp:`<div class="stamp ${v===true?"ok":v===false?"no":"na"}">${v===true?"Accept":v===false?"Reject":"Open"}</div>`};
+}
+
+function layoutRow(b){
+  const {row, stamp} = shell(b);
+  const lk = locked();
+  row.innerHTML = `
+    <div class="row-top">
+      <div class="pip">${b.num}</div>
+      <textarea class="req" rows="1" placeholder="Type the requirement…" data-k="req" ${lk?"readonly":""}></textarea>
+      ${stamp}
+      <button class="kill" title="${lk?"Layout is locked":"Remove characteristic "+b.num}" ${lk?"disabled":""}>&#10005;</button>
+    </div>
+    <div class="nums">
+      <div class="f"><span class="lab">Nominal</span><input data-k="nom" placeholder="—" ${lk?"readonly":""}></div>
+      <div class="f"><span class="lab">+ Tol</span><input data-k="up" placeholder="—" ${lk?"readonly":""}></div>
+      <div class="f"><span class="lab">&minus; Tol</span><input data-k="lo" placeholder="—" ${lk?"readonly":""}></div>
+      <div class="f actual"><span class="lab">Actual</span><input data-k="actual" placeholder="—"></div>
+    </div>
+    <div class="meta">
+      <span class="lab">Sheet ${b.page}</span>
+      <select data-k="method" ${lk?"disabled":""}>${METHODS.map(m=>`<option value="${m}">${m||"Method…"}</option>`).join("")}</select>
+    </div>`;
+
+  const ta = row.querySelector(".req");
+  ta.value = b.req;
+  requestAnimationFrame(()=>{ ta.style.height="auto"; ta.style.height=ta.scrollHeight+"px"; });
+  bindFields(row, b);
+  row.querySelector(".kill").addEventListener("click", e=>{ e.stopPropagation(); remove(b.id); });
+  bindRow(row, b);
+  return row;
+}
+
+function inspectRow(b){
+  const {row, stamp} = shell(b);
+  const L = limits(b);
+  const a = parseFloat(b.actual), dev = (L && isFinite(a)) ? a - L.nom : null;
+  const ok = verdict(b);
+  row.innerHTML = `
+    <div class="row-top">
+      <div class="pip">${b.num}</div>
+      <div class="ro${b.req?"":" none"}">${b.req ? esc(b.req) : "no requirement recorded"}</div>
+      ${stamp}
+    </div>
+    <div class="spec">
+      ${L ? `<span>limits <b>${fmt(L.lsl)}</b> to <b>${fmt(L.usl)}</b></span>` : `<span>no numeric limits set</span>`}
+      <span>sheet <b>${b.page}</b></span>
+      ${b.method?`<span>${esc(b.method)}</span>`:""}
+    </div>
+    <div class="take">
+      <div class="f"><span class="lab">Actual</span><input data-k="actual" placeholder="—" inputmode="decimal"></div>
+      ${dev!==null?`<div class="dev ${ok?"ok":"no"}">${dev>=0?"+":"\u2212"}${fmt(Math.abs(dev))}</div>`:""}
+      <div class="f grow note"><span class="lab">Note</span><input data-k="note" placeholder="gage, setup, rework…"></div>
+    </div>
+    ${bandHTML(b)}`;
+  bindFields(row, b);
+  bindRow(row, b);
+  return row;
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function bindFields(row, b){
+  row.querySelectorAll("[data-k]").forEach(el=>{
+    const k = el.dataset.k;
+    if(k!=="req") el.value = b[k] || "";
+    el.addEventListener("input", ()=>{
+      const wasLocked = locked();
+      b[k] = el.value;
+      if(k==="req"){
+        el.style.height="auto"; el.style.height=el.scrollHeight+"px";
+        const p = parseReq(el.value);
+        if(!b.nom && p.nom!=null) b.nom = fmt(p.nom);
+        if(!b.up && p.up!=null) b.up = fmt(p.up);
+        if(!b.lo && p.lo!=null) b.lo = fmt(p.lo);
+      }
+      // first result against this layout stamps the version onto the record
+      if((k==="actual"||k==="note") && el.value !== "" && S.record.layoutVersion == null){
+        S.record.layoutVersion = S.layout.version;
+        S.record.started = S.record.started || new Date().toISOString();
+      }
+      refreshRow(row, b);
+      // the first result locks the layout, and clearing the last one unlocks it
+      if(wasLocked !== locked()) applyLock();
+      paintLock();
+    });
+    el.addEventListener("change", ()=>{ if(k==="req") paintList(); });
+    el.addEventListener("focus", ()=>{ if(S.sel!==b.id){ S.sel=b.id; drawBalloons(); markSel(); } });
+    if(k==="actual") el.addEventListener("keydown", ev=>{
+      if(ev.key==="Enter"){ ev.preventDefault(); nextOpen(b.num); }
+    });
+  });
+}
+
+function bindRow(row, b){
+  row.addEventListener("click", e=>{
+    if(e.target.closest("input,textarea,select,button")) return;
+    select(b.id, true); goTo(b);
+  });
+}
+
+/* live update without rebuilding the whole list under the cursor */
+function refreshRow(row, b){
+  const v = verdict(b);
+  const st = row.querySelector(".stamp");
+  st.className = "stamp " + (v===true?"ok":v===false?"no":"na");
+  st.textContent = v===true?"Accept":v===false?"Reject":"Open";
+  $("tally").innerHTML = tallyText();
+  paintSave();
+  if(S.view==="inspect"){
+    const L = limits(b), a = parseFloat(b.actual);
+    const dev = row.querySelector(".dev");
+    if(dev && L && isFinite(a)){
+      const d = a - L.nom;
+      dev.className = "dev " + (v?"ok":"no");
+      dev.textContent = (d>=0?"+":"\u2212") + fmt(Math.abs(d));
+    } else if(dev) dev.textContent = "";
+    const old = row.querySelector(".band");
+    if(old) old.remove();
+    const html = bandHTML(b);
+    if(html) row.insertAdjacentHTML("beforeend", html);
+    drawBalloons();
+  }
+}
+
+function focusActual(id){
+  const el = document.querySelector(`.row[data-id="${id}"] [data-k="actual"]`);
+  if(el){ el.focus(); el.select(); }
+}
+
+function nextOpen(fromNum){
+  const pool = S.balloons.slice().sort((a,b)=>a.num-b.num);
+  const after = pool.filter(b=>b.num>fromNum && b.actual==="");
+  const target = after[0] || pool.find(b=>b.actual==="");
+  if(!target){ say("Every characteristic has a result."); return; }
+  select(target.id, true); goTo(target); markSel(); focusActual(target.id);
+}
+function markSel(){
+  document.querySelectorAll(".row").forEach(r=>r.classList.toggle("sel", r.dataset.id===S.sel));
+}
+async function goTo(b){
+  if(b.page !== S.pg){ S.pg = b.page; await render(false); }
+  const svg = $("ov"), rect = svg.getBoundingClientRect();
+  const d = S.cache.get(S.pg); if(!d) return;
+  const sx = rect.width/d.vp.width, sy = rect.height/d.vp.height;
+  stage.scrollLeft += (rect.left + b.bx*sx) - stage.clientWidth/2 - stage.getBoundingClientRect().left;
+  stage.scrollTop  += (rect.top  + b.by*sy) - stage.clientHeight/2 - stage.getBoundingClientRect().top;
+}
+
+/* ============================ toolbar wiring ============================ */
+$("prev").onclick = ()=>{ if(S.pg>1){ S.pg--; render(false); } };
+$("next").onclick = ()=>{ if(S.pg<S.pages){ S.pg++; render(false); } };
+$("zin").onclick  = ()=>{ S.zoom = Math.min(6, S.zoom*1.25); render(false); };
+$("zout").onclick = ()=>{ S.zoom = Math.max(.1, S.zoom/1.25); render(false); };
+$("fit").onclick  = ()=>render(true);
+
+function setMode(m){
+  S.mode = m;
+  $("mBal").setAttribute("aria-pressed", m==="balloon");
+  $("mPan").setAttribute("aria-pressed", m==="pan");
+  stage.classList.toggle("pan", m==="pan" || S.view==="inspect" || locked());
+}
+$("mBal").onclick = ()=>setMode("balloon");
+$("mPan").onclick = ()=>setMode("pan");
+
+function setView(v){
+  S.view = v;
+  const ins = v==="inspect";
+  $("vLay").setAttribute("aria-pressed", !ins);
+  $("vIns").setAttribute("aria-pressed", ins);
+  $("layoutOnly").style.display = ins ? "none" : "flex";
+  $("inspectOnly").style.display = ins ? "flex" : "none";
+  $("renum").style.display = ins ? "none" : "";
+  stage.classList.toggle("pan", ins || S.mode==="pan" || locked());
+  drawBalloons(); paintList();
+}
+$("vLay").onclick = ()=>setView("layout");
+$("vIns").onclick = ()=>{
+  setView("inspect");
+  if(!S.record.unitId.trim() && S.balloons.length){
+    say(`No ${S.layout.unitLabel.toLowerCase()} set — results won't be tied to a unit. Fill it in at the top left.`, 6000);
+    $("u_id").focus();
+  } else if(S.balloons.length){
+    say("Balloons are locked. Click one on the print to jump to its result field; Enter moves to the next open one.", 5200);
+  }
+};
+
+function setFilter(f){
+  S.filter = f;
+  $("fAll").setAttribute("aria-pressed", f==="all");
+  $("fOpen").setAttribute("aria-pressed", f==="open");
+  $("fBad").setAttribute("aria-pressed", f==="bad");
+  paintList();
+}
+$("fAll").onclick = ()=>setFilter("all");
+$("fOpen").onclick = ()=>setFilter("open");
+$("fBad").onclick = ()=>setFilter("bad");
+$("jump").onclick = ()=>{
+  if(!S.balloons.length) return say("Nothing to inspect yet.");
+  const cur = S.balloons.find(b=>b.id===S.sel);
+  nextOpen(cur ? cur.num : 0);
+};
+
+$("renum").onclick = ()=>{
+  if(locked()) return say("Layout is locked because results have been entered. Use Revise layout to change it.", 5200);
+  S.balloons.sort((a,b)=> a.page-b.page || a.ay-b.ay || a.ax-b.ax);
+  S.balloons.forEach((b,i)=>b.num=i+1);
+  S.layout.next = S.balloons.length+1;
+  drawBalloons(); paintList();
+  say("Renumbered top to bottom, sheet by sheet.");
+};
+
+stage.addEventListener("wheel", e=>{
+  if(!e.ctrlKey || !S.doc) return;
+  e.preventDefault();
+  S.zoom = Math.max(.1, Math.min(6, S.zoom * (e.deltaY<0?1.12:1/1.12)));
+  reflow(false);
+}, {passive:false});
+
+document.addEventListener("keydown", e=>{
+  if(/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const ins = S.view==="inspect";
+  if(e.key==="Escape") select(null);
+  else if(e.key==="PageDown" && S.pg<S.pages){ S.pg++; render(false); }
+  else if(e.key==="PageUp" && S.pg>1){ S.pg--; render(false); }
+  else if(ins){
+    if(e.key==="Enter"){
+      e.preventDefault();
+      const cur = S.balloons.find(b=>b.id===S.sel);
+      nextOpen(cur ? cur.num : 0);
+    }
+  }
+  else if(e.key==="b"||e.key==="B") setMode("balloon");
+  else if(e.key==="v"||e.key==="V") setMode("pan");
+  else if((e.key==="Delete"||e.key==="Backspace") && S.sel){ e.preventDefault(); remove(S.sel); }
+});
+
+/* ============================ title block wiring ============================ */
+const PART_FIELDS = {h_partNo:"partNo", h_partName:"partName", h_rev:"rev", h_dwgNo:"dwgNo"};
+Object.keys(PART_FIELDS).forEach(id=>{
+  $(id).addEventListener("input", ()=>{ S.layout.part[PART_FIELDS[id]] = $(id).value; paintTitleSum(); paintSave(); });
+});
+const REC_FIELDS = {h_insp:"inspector", h_date:"date", h_order:"order"};
+Object.keys(REC_FIELDS).forEach(id=>{
+  $(id).addEventListener("input", ()=>{ S.record[REC_FIELDS[id]] = $(id).value; paintTitleSum(); paintSave(); });
+});
+
+function paintHeader(){
+  Object.keys(PART_FIELDS).forEach(id=>{ $(id).value = S.layout.part[PART_FIELDS[id]] || ""; });
+  Object.keys(REC_FIELDS).forEach(id=>{ $(id).value = S.record[REC_FIELDS[id]] || ""; });
+  $("h_pattern").value = S.layout.unitPattern || "";
+  paintTitleSum();
+}
+
+/* The title block is reference data you set once and then read past all day,
+   so it folds away to a two-line summary and gives the space to the
+   characteristics list, which is the part anyone actually works in. */
+function setTitleBlock(open){
+  S.tbOpen = !!open;
+  $("titleblock").classList.toggle("open", S.tbOpen);
+  $("tbToggle").setAttribute("aria-expanded", String(S.tbOpen));
+  $("tbGrid").hidden = !S.tbOpen;
+  $("tbSum").hidden = S.tbOpen;
+  paintTitleSum();
+}
+function paintTitleSum(){
+  const box = $("tbSum");
+  if(!box) return;
+  const p = S.layout.part, r = S.record;
+  const head = [p.partNo && (p.partNo + (p.rev ? " REV " + p.rev : "")), p.partName]
+                 .filter(Boolean).join("  \u00b7  ");
+  const sub = [r.inspector, r.date, r.order && ("order " + r.order)]
+                 .filter(Boolean).join("  \u00b7  ");
+  box.classList.toggle("none", !head);
+  box.innerHTML = `<b>${esc(head || "no part details yet")}</b>` +
+                  (sub ? `<span>${esc(sub)}</span>` : "");
+}
+$("tbToggle").onclick = ()=>setTitleBlock(!S.tbOpen);
+
+/* ============================ file shape ============================ */
+function split(){
+  const chars = S.balloons.slice().sort((a,b)=>a.num-b.num).map(b=>{
+    const o = {}; LAYOUT_KEYS.forEach(k=>o[k]=b[k]); return o;
+  });
+  const results = {};
+  S.balloons.forEach(b=>{
+    if((b.actual||"")!=="" || (b.note||"")!=="")
+      results[b.id] = {actual:b.actual||"", note:b.note||""};
+  });
+  return {chars, results};
+}
+
+function fileObject(includeRecord){
+  const {chars, results} = split();
+  const out = {
+    v: FILE_VERSION,
+    kind: "balloon-inspection",
+    meta: {app:APP_ID, written:new Date().toISOString()},
+    layout: {
+      version: S.layout.version,
+      source: S.layout.source || S.name,
+      pages: S.layout.pages || S.pages,
+      part: Object.assign({}, S.layout.part),
+      unitLabel: S.layout.unitLabel,
+      unitPattern: S.layout.unitPattern,
+      drawing: Object.assign({file:"", sha256:"", pages:0}, S.layout.drawing),
+      next: S.layout.next,
+      chars
+    },
+    record: null
+  };
+  if(includeRecord){
+    out.record = {
+      unitId: S.record.unitId,
+      seq: S.record.seq,
+      rework: !!S.record.rework,
+      order: S.record.order,
+      inspector: S.record.inspector,
+      date: S.record.date,
+      layoutVersion: S.record.layoutVersion == null ? S.layout.version : S.record.layoutVersion,
+      started: S.record.started,
+      completed: new Date().toISOString(),
+      status: S.record.status || "",
+      disposition: S.record.disposition || "",
+      results
+    };
+  }
+  return out;
+}
+
+/* v1 files kept the two halves in one flat array — pull them apart */
+function migrate(j){
+  if(j && j.v === FILE_VERSION && j.layout) return j;
+  if(j && j.v === 1 && Array.isArray(j.balloons)){
+    const h = j.header || {};
+    const chars = [], results = {};
+    j.balloons.forEach(b=>{
+      const c = {}; LAYOUT_KEYS.forEach(k=>c[k]=b[k]); chars.push(c);
+      if((b.actual||"")!=="" || (b.note||"")!=="")
+        results[b.id] = {actual:b.actual||"", note:b.note||""};
+    });
+    return {
+      v: FILE_VERSION, kind:"balloon-inspection", meta:{migratedFrom:1},
+      layout:{
+        version:1, source:j.source||"", pages:j.pages||0,
+        part:{partNo:h.partNo||"", partName:h.partName||"", rev:h.rev||"", dwgNo:h.dwgNo||""},
+        unitLabel:"Serial No.", unitPattern:"",
+        next: j.next || (chars.length+1), chars
+      },
+      record:{
+        unitId:"", seq:1, rework:false, order:h.order||"",
+        inspector:h.inspector||"", date:h.date||"",
+        layoutVersion: Object.keys(results).length ? 1 : null,
+        started:null, completed:null, results
+      }
+    };
+  }
+  throw new Error("unrecognised file");
+}
+
+function adopt(j){
+  const L = j.layout;
+  S.layout = {
+    version: L.version || 1,
+    source: L.source || "",
+    pages: L.pages || 0,
+    part: Object.assign({partNo:"",partName:"",rev:"",dwgNo:""}, L.part||{}),
+    unitLabel: L.unitLabel || "Serial No.",
+    unitPattern: L.unitPattern || "",
+    drawing: Object.assign({file:"", sha256:"", pages:0}, L.drawing||{}),
+    next: L.next || ((L.chars||[]).length + 1)
+  };
+  const R = j.record;
+  S.record = newRecord();
+  if(R){
+    S.record.unitId = R.unitId || "";
+    S.record.seq = R.seq || 1;
+    S.record.rework = !!R.rework;
+    S.record.order = R.order || "";
+    S.record.inspector = R.inspector || "";
+    S.record.date = R.date || "";
+    S.record.layoutVersion = R.layoutVersion == null ? null : R.layoutVersion;
+    S.record.started = R.started || null;
+    S.record.status = R.status || "";
+    S.record.disposition = R.disposition || "";
+  }
+  const results = (R && R.results) || {};
+  S.balloons = (L.chars||[]).map(c=>{
+    const b = {}; LAYOUT_KEYS.forEach(k=>b[k]=c[k]);
+    const r = results[c.id] || {};
+    b.actual = r.actual || ""; b.note = r.note || "";
+    return b;
+  });
+  S.sel = null;
+  S.revising = false;
+  paintHeader(); paintTag(); drawBalloons(); paintList();
+  setTitleBlock(!S.layout.part.partNo);   // filled in already? then fold it away
+  markSaved();   // what is on screen came off disk, so it is clean
+}
+
+/* ============================ export menu ============================ */
+const menu = $("expMenu");
+$("exp").onclick = e=>{ e.stopPropagation(); menu.hidden = !menu.hidden; };
+document.addEventListener("click", ()=>{ menu.hidden = true; });
+menu.addEventListener("click", e=>e.stopPropagation());
+
+function stem(){
+  const p = S.layout.part;
+  const bits = [p.partNo || (S.name||"").replace(/\.pdf$/i,"") || "drawing"];
+  if(p.rev) bits.push("REV" + p.rev);
+  if(S.record.unitId.trim()) bits.push(S.record.unitId.trim());
+  bits.push((S.record.date || today()).replace(/-/g,""));
+  return bits.join("_").replace(/[^\w.\-]+/g,"_").replace(/_+/g,"_");
+}
+function save(blob, filename){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+}
+const q = v => `"${String(v==null?"":v).replace(/"/g,'""')}"`;
+const csv = rows => rows.map(r=>r.map(q).join(",")).join("\r\n");
+
+function unitLine(){
+  const p = S.layout.part, r = S.record;
+  const bits = [];
+  if(p.partNo) bits.push(p.partNo + (p.rev ? " REV " + p.rev : ""));
+  if(r.unitId) bits.push(S.layout.unitLabel.toUpperCase() + " " + r.unitId + (r.seq>1?" #"+r.seq:""));
+  if(r.rework) bits.push("RE-INSPECTION");
+  if(r.inspector) bits.push(r.inspector);
+  if(r.date) bits.push(r.date);
+  return bits.join("  \u00b7  ");
+}
+
+$("eCsv").onclick = ()=>{
+  if(!S.balloons.length) return say("Nothing to export yet — add a characteristic first.");
+  const p = S.layout.part, r = S.record;
+  const rows = [
+    ["Part number",p.partNo,"Part name",p.partName,"Rev",p.rev],
+    ["Drawing number",p.dwgNo,"Order / traveler",r.order,"Source",S.layout.source||S.name],
+    [S.layout.unitLabel,r.unitId,"Inspection no.",r.seq,"Re-inspection",r.rework?"YES":"NO"],
+    ["Inspector",r.inspector,"Date",r.date,"Layout version",r.layoutVersion==null?S.layout.version:r.layoutVersion],
+    [],
+    ["Char no.","Sheet","Requirement","Nominal","Upper tol","Lower tol","Method","Actual","Result","Notes"]
+  ];
+  S.balloons.slice().sort((a,b)=>a.num-b.num).forEach(b=>{
+    const v = verdict(b);
+    rows.push([b.num,b.page,b.req,b.nom,b.up,b.lo,b.method,b.actual, v===true?"ACCEPT":v===false?"REJECT":"", b.note]);
+  });
+  save(new Blob(["\ufeff"+csv(rows)], {type:"text/csv;charset=utf-8"}), stem()+"_inspection.csv");
+  say("Inspection list saved.");
+};
+
+$("eLog").onclick = ()=>{
+  const done = S.balloons.filter(b=>(b.actual||"")!=="").length;
+  const all = S.log.slice();
+  if(done){
+    const bad = S.balloons.filter(b=>verdict(b)===false).length;
+    all.push({
+      unitId:S.record.unitId||"(unnamed)", seq:S.record.seq, rework:S.record.rework,
+      label:S.layout.unitLabel, order:S.record.order, inspector:S.record.inspector,
+      date:S.record.date, layoutVersion:S.record.layoutVersion==null?S.layout.version:S.record.layoutVersion,
+      total:S.balloons.length, done, bad,
+      result: bad ? "REJECT" : (done===S.balloons.length ? "ACCEPT" : "INCOMPLETE"),
+      when:new Date().toISOString()
+    });
+  }
+  if(!all.length) return say("No units recorded yet this session.");
+  const p = S.layout.part;
+  const rows = [
+    ["Part number",p.partNo,"Rev",p.rev,"Part name",p.partName],
+    [],
+    ["Unit ID","Type","Inspection no.","Re-inspection","Order / traveler","Inspector","Date",
+     "Layout version","Characteristics","Measured","Out of tolerance","Result","Recorded at"]
+  ];
+  all.forEach(e=>rows.push([e.unitId,e.label,e.seq,e.rework?"YES":"NO",e.order,e.inspector,e.date,
+                            e.layoutVersion,e.total,e.done,e.bad,e.result,e.when]));
+  const base = (p.partNo||"session").replace(/[^\w.\-]+/g,"_");
+  save(new Blob(["\ufeff"+csv(rows)], {type:"text/csv;charset=utf-8"}), base+"_session_"+today().replace(/-/g,"")+".csv");
+  say(`Session log saved — ${all.length} unit${all.length===1?"":"s"}.`);
+};
+
+$("ePdf").onclick = async ()=>{
+  if(!S.bytes) return say("Open a drawing first.");
+  if(!S.balloons.length) return say("Nothing to burn in yet — add a balloon first.");
+  try{
+    const {PDFDocument, rgb, StandardFonts} = PDFLib;
+    const doc = await PDFDocument.load(S.bytes.slice(0));
+    const font = await doc.embedFont(StandardFonts.HelveticaBold);
+    const plain = await doc.embedFont(StandardFonts.Helvetica);
+    const ink = rgb(0.816,0.204,0.173);
+    const pages = doc.getPages();
+    const line = unitLine();
+
+    for(let n=1;n<=S.pages;n++){
+      const pg = pages[n-1];
+      if(!pg) continue;
+      if(line) pg.drawText(line, {x:20, y:9, size:6.5, font:plain, color:ink});
+      const mine = S.balloons.filter(b=>b.page===n);
+      if(!mine.length) continue;
+      const d = await pageData(n);
+      const r = Math.max(8, Math.min(d.vp.width, d.vp.height)/62);
+      for(const b of mine){
+        const [ax,ay] = d.vp.convertToPdfPoint(b.ax, b.ay);
+        const [bx,by] = d.vp.convertToPdfPoint(b.bx, b.by);
+        pg.drawLine({start:{x:ax,y:ay}, end:{x:bx,y:by}, thickness:r*0.09, color:ink});
+        pg.drawCircle({x:ax, y:ay, size:r*0.13, color:ink});
+        pg.drawCircle({x:bx, y:by, size:r, color:rgb(1,1,1), borderColor:ink, borderWidth:r*0.13});
+        const label = String(b.num), size = r*1.05;
+        pg.drawText(label, {
+          x: bx - font.widthOfTextAtSize(label,size)/2,
+          y: by - size*0.35, size, font, color: ink
+        });
+      }
+    }
+    save(new Blob([await doc.save()],{type:"application/pdf"}), stem()+"_ballooned.pdf");
+    say("Ballooned drawing saved.");
+  }catch(err){
+    console.error(err);
+    say("Couldn't write the PDF. If the file is password-protected or signed, save a flat copy and reopen it.", 6000);
+  }
+};
+
+$("eJson").onclick = ()=>{
+  if(!S.balloons.length) return say("Nothing to save yet — add a characteristic first.");
+  save(new Blob([JSON.stringify(fileObject(true),null,2)],{type:"application/json"}), stem()+"_inspection.json");
+  Cache.clear();
+  markSaved();
+  say("Inspection saved — layout and this unit's results together.", 4600);
+};
+
+$("eLayout").onclick = ()=>{
+  if(!S.balloons.length) return say("Nothing to save yet — add a characteristic first.");
+  const p = S.layout.part;
+  const base = [p.partNo || "layout", p.rev?"REV"+p.rev:""].filter(Boolean)
+                 .join("_").replace(/[^\w.\-]+/g,"_");
+  save(new Blob([JSON.stringify(fileObject(false),null,2)],{type:"application/json"}), base+"_layout.json");
+  if(!hasResults()) markSaved();   // with no results, the layout file is the whole picture
+  say("Layout saved on its own. Load it against the same drawing to start a new unit.", 5600);
+};
+
+$("iJson").onclick = ()=>$("jfile").click();
+$("jfile").onchange = async e=>{
+  const f = e.target.files[0]; e.target.value="";
+  if(f) readMarkup(f);
+};
+
+async function readMarkup(f){
+  try{
+    const j = migrate(JSON.parse(await f.text()));
+    if(!Array.isArray(j.layout.chars)) throw new Error("no characteristics");
+    adopt(j);
+
+    const notes = [];
+    if(j.meta && j.meta.migratedFrom === 1) notes.push("Upgraded from the old single-part format");
+    if(!j.record || !Object.keys(j.record.results||{}).length) notes.push("Layout only — no results in this file");
+    if(S.doc && j.layout.source && j.layout.source !== S.name)
+      notes.push(`made on ${j.layout.source}, not the drawing that's open`);
+    if(!S.doc) notes.push("open the drawing to see the balloons");
+    say(notes.length ? "Loaded. " + notes.join(". ") + "." : "Loaded.", notes.length?6500:3400);
+
+    if(j.record && j.record.unitId) return;
+    if(S.balloons.length && !S.record.unitId) $("u_id").focus();
+  }catch(err){
+    console.error(err);
+    say("That file isn't a markup file this tool wrote.");
+  }
+}
+
+/* ============================ boot ============================ */
+S.record.date = today();
+$("h_date").value = S.record.date;
+paintHeader(); paintTag(); paintJob(); paintList();
+initRole().then(restoreJob).then(()=>{ if(!Store.attached) offerDraft(); });
+</script>
