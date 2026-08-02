@@ -443,6 +443,42 @@ body.operator .planner-only{display:none!important}
 .anchor.st-open{fill:#6d7f8f}
 .anchor.st-ok{fill:var(--stamp)}
 
+/* ---------- review: characteristics × units, read from the job folder ---------- */
+.review{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--ink)}
+.review[hidden]{display:none}   /* an explicit display beats the UA's [hidden] rule */
+.review-head{
+  flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:14px 20px;border-bottom:1px solid var(--rule);background:var(--panel);flex-wrap:wrap;
+}
+.review-head strong{font-size:14px}
+.review-sub{margin-left:10px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+.review-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.review-tools input[type="text"],#reviewSearch{
+  background:var(--panel-2);border:1px solid var(--rule);border-radius:3px;color:var(--text);
+  padding:6px 10px;font-family:var(--sans);font-size:13px;width:170px;
+}
+.review-scroll{flex:1 1 auto;overflow:auto;padding:0}
+.rtable{border-collapse:collapse;font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+.rtable th,.rtable td{padding:7px 12px;border-bottom:1px solid var(--rule-soft);text-align:left}
+.rtable thead th{
+  position:sticky;top:0;background:var(--panel);color:var(--muted);font-weight:600;
+  border-bottom:1px solid var(--rule);z-index:2;
+}
+.rtable thead th .u-date{display:block;font-weight:400;color:var(--dim);font-size:10.5px;margin-top:2px}
+.rtable tbody th{
+  position:sticky;left:0;background:var(--panel);color:var(--text);text-align:left;
+  font-family:var(--sans);font-weight:400;white-space:normal;max-width:280px;min-width:180px;z-index:1;
+}
+.rtable tbody th b{font-family:var(--mono);color:var(--dim);margin-right:6px}
+.rtable thead th:first-child{position:sticky;left:0;z-index:3;background:var(--panel)}
+.rtable td{color:var(--dim)}
+.rtable td.ok{color:var(--stamp);background:rgba(47,158,107,.08)}
+.rtable td.no{color:var(--red-soft);background:rgba(232,87,77,.1);font-weight:600}
+.rtable tbody tr:hover td,.rtable tbody tr:hover th{background:#1c2731}
+.rtable tbody tr:hover td.ok{background:rgba(47,158,107,.14)}
+.rtable tbody tr:hover td.no{background:rgba(232,87,77,.16)}
+.review-empty{padding:40px;color:var(--muted);text-align:center;line-height:1.6}
+
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media (max-width:900px){.side{width:300px}.nums{grid-template-columns:repeat(2,1fr)}}
 </style>
@@ -533,6 +569,7 @@ body.operator .planner-only{display:none!important}
       </div>
       <div class="job-name off" id="jobName">not connected</div>
       <div class="job-stat" id="jobStat"></div>
+      <button class="btn tiny planner-only" id="jobReview" hidden>Review results&hellip;</button>
       <button class="btn tiny primary" id="jobAct" hidden></button>
       <button class="btn tiny" id="jobBack" hidden></button>
     </section>
@@ -614,6 +651,21 @@ body.operator .planner-only{display:none!important}
       Click a dimension on the print and it becomes characteristic 1. Drag the balloon
       clear of the geometry — the leader stays put.
       <br><br><em>PDF stays on this machine. Nothing is uploaded.</em>
+    </div>
+    <div class="review" id="review" hidden>
+      <div class="review-head">
+        <div>
+          <strong id="reviewTitle">Results</strong>
+          <span class="review-sub" id="reviewSub"></span>
+        </div>
+        <div class="review-tools">
+          <input id="reviewSearch" placeholder="Find a unit…" autocomplete="off" spellcheck="false">
+          <label class="check"><input type="checkbox" id="reviewBad">Rejects only</label>
+          <button class="btn tiny" id="reviewExport">Export table (.csv)</button>
+          <button class="btn tiny" id="reviewClose">Close</button>
+        </div>
+      </div>
+      <div class="review-scroll" id="reviewBody"></div>
     </div>
   </main>
 </div>
@@ -1470,6 +1522,7 @@ function layoutSig(){
 
 function paintJob(){
   const nameEl = $("jobName"), stat = $("jobStat"), act = $("jobAct");
+  $("jobReview").hidden = true;    // only the fully-attached branch below turns this back on
   if(!Store.supported){
     nameEl.textContent = "working from files";
     nameEl.classList.add("off");
@@ -1512,6 +1565,7 @@ function paintJob(){
     S.job.version ? "layout v" + S.job.version : "no layout published",
     S.job.records + " unit" + (S.job.records === 1 ? "" : "s") + " recorded"
   ].join("  \u00b7  ");
+  $("jobReview").hidden = false;
 
   if(isOperator()){
     // never offer to change the spec; offer the way back to the part list
@@ -1543,6 +1597,142 @@ $("jobAct").onclick = ()=>{
   if(what === "publish") publishJob();
   else if(what === "save") saveRecord();
   else if(what === "parts") backToParts();
+};
+
+/* ============================ review ============================
+   Characteristics down the side, units across the top, read straight from
+   records/ in the attached job folder — not from whatever this tab happens
+   to have open. A record is judged against the layout version it was
+   actually measured against, not today's, because a characteristic's
+   tolerance can move between v1 and v2 and a v1 record has to keep meaning
+   what it meant when it was written.
+============================================================== */
+let reviewData = null;
+
+async function buildReviewData(){
+  const latest = await Store.readLayout();
+  const chars = ((latest && latest.chars) || []).slice().sort((a,b)=>a.num-b.num);
+  const records = await Store.listRecords();
+  records.sort((a,b)=> (a.unitId||"").localeCompare(b.unitId||"", undefined, {numeric:true}) || a.seq-b.seq);
+
+  const layoutCache = new Map();
+  if(latest) layoutCache.set(latest.version, latest);
+  async function layoutFor(version){
+    if(version == null) return latest;
+    if(!layoutCache.has(version)){
+      let lay = null;
+      try{ lay = await Store.readLayout(version); }catch(e){}
+      layoutCache.set(version, lay);
+    }
+    return layoutCache.get(version) || latest;
+  }
+
+  const cells = new Map();
+  for(const r of records){
+    const lay = await layoutFor(r.layoutVersion);
+    for(const [id, res] of Object.entries(r.results || {})){
+      const spec = (lay && lay.chars && lay.chars.find(c=>c.id===id)) || null;
+      const fake = {actual: res.actual||"", nom: spec?spec.nom:"", up: spec?spec.up:"", lo: spec?spec.lo:""};
+      cells.set(id+"|"+r.file, {actual:res.actual||"", note:res.note||"", status:status(fake)});
+    }
+  }
+  return {chars, records, cells};
+}
+
+function reviewFiltered(){
+  const q = $("reviewSearch").value.trim().toLowerCase();
+  const badOnly = $("reviewBad").checked;
+  let records = reviewData.records;
+  if(q) records = records.filter(r => (r.unitId||"").toLowerCase().includes(q));
+  let chars = reviewData.chars;
+  if(badOnly){
+    chars = chars.filter(c => records.some(r => {
+      const cell = reviewData.cells.get(c.id+"|"+r.file);
+      return cell && cell.status === false;
+    }));
+  }
+  return {chars, records};
+}
+
+function renderReview(){
+  const body = $("reviewBody");
+  const {chars, records} = reviewFiltered();
+  if(!reviewData.chars.length){
+    body.innerHTML = `<div class="review-empty">No layout published to this folder yet.</div>`;
+    return;
+  }
+  if(!reviewData.records.length){
+    body.innerHTML = `<div class="review-empty">No units recorded to this folder yet.</div>`;
+    return;
+  }
+  if(!records.length || !chars.length){
+    body.innerHTML = `<div class="review-empty">Nothing matches that filter.</div>`;
+    return;
+  }
+  let html = `<table class="rtable"><thead><tr><th></th>`;
+  for(const r of records){
+    const label = r.unitId || "(unnamed)";
+    html += `<th>${esc(label)}${r.seq>1?` <span style="color:var(--dim)">r${r.seq}</span>`:""}`
+          + (r.date ? `<span class="u-date">${esc(r.date)}</span>` : "") + `</th>`;
+  }
+  html += `</tr></thead><tbody>`;
+  for(const c of chars){
+    html += `<tr><th><b>${c.num}.</b>${esc(c.req || "no requirement recorded")}</th>`;
+    for(const r of records){
+      const cell = reviewData.cells.get(c.id+"|"+r.file);
+      if(!cell){ html += `<td>—</td>`; continue; }
+      const cls = cell.status===true?"ok":cell.status===false?"no":"";
+      const title = cell.note ? ` title="${esc(cell.note)}"` : "";
+      html += `<td class="${cls}"${title}>${esc(cell.actual || "—")}</td>`;
+    }
+    html += `</tr>`;
+  }
+  html += `</tbody></table>`;
+  body.innerHTML = html;
+}
+
+async function openReview(){
+  if(!Store.attached) return;
+  $("sheet").hidden = true; $("hint").hidden = true;
+  $("review").hidden = false;
+  $("reviewTitle").textContent = "Results — " + Store.name;
+  $("reviewSub").textContent = "loading…";
+  $("reviewSearch").value = ""; $("reviewBad").checked = false;
+  try{
+    reviewData = await buildReviewData();
+    $("reviewSub").textContent = `${reviewData.chars.length} characteristic${reviewData.chars.length===1?"":"s"} `
+      + `× ${reviewData.records.length} unit${reviewData.records.length===1?"":"s"}`;
+    renderReview();
+  }catch(err){
+    console.error(err);
+    $("reviewSub").textContent = "";
+    $("reviewBody").innerHTML = `<div class="review-empty">Couldn't read records from this folder.</div>`;
+  }
+}
+function closeReview(){
+  $("review").hidden = true;
+  $("sheet").hidden = !S.doc;
+  $("hint").hidden = !!S.doc;
+}
+$("jobReview").onclick = openReview;
+$("reviewClose").onclick = closeReview;
+$("reviewSearch").addEventListener("input", ()=>{ if(reviewData) renderReview(); });
+$("reviewBad").addEventListener("change", ()=>{ if(reviewData) renderReview(); });
+$("reviewExport").onclick = ()=>{
+  if(!reviewData || !reviewData.chars.length || !reviewData.records.length)
+    return say("Nothing to export yet.");
+  const rows = [["Char no.","Requirement", ...reviewData.records.map(r=>(r.unitId||"(unnamed)")+(r.seq>1?" r"+r.seq:""))]];
+  for(const c of reviewData.chars){
+    rows.push([c.num, c.req||"", ...reviewData.records.map(r=>{
+      const cell = reviewData.cells.get(c.id+"|"+r.file);
+      if(!cell) return "";
+      return cell.actual + (cell.status===false ? " *" : "");
+    })]);
+  }
+  rows.push([]); rows.push(["* out of tolerance"]);
+  const base = (Store.name||"results").replace(/[^\w.\-]+/g,"_");
+  save(new Blob([String.fromCharCode(0xFEFF)+csv(rows)], {type:"text/csv;charset=utf-8"}), base+"_results_"+today().replace(/-/g,"")+".csv");
+  say("Results table saved.");
 };
 
 async function openJob(){
