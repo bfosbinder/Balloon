@@ -15,7 +15,8 @@
       "Bash(gh auth *)",
       "PowerShell(Get-Command gh -ErrorAction SilentlyContinue)",
       "PowerShell(winget install --id GitHub.cli -e --accept-source-agreements --accept-package-agreements)",
-      "Bash(netstat -ano)"
+      "Bash(netstat -ano)",
+      "Bash(git push *)"
     ]
   }
 }

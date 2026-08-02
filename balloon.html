@@ -1886,7 +1886,7 @@ function drawBalloons(){
   const r = radius(), ins = S.view === "inspect";
   for(const b of S.balloons){
     if(b.page !== S.pg) continue;
-    const v = verdict(b);
+    const v = status(b);
     const st = !ins ? "" : (" st-" + (v===true?"ok":v===false?"no":"open"));
     const g = document.createElementNS("http://www.w3.org/2000/svg","g");
     g.setAttribute("class","bub"+st+(S.sel===b.id?" sel":""));
@@ -2133,6 +2133,17 @@ function verdict(b){
   return a >= lsl - 1e-9 && a <= usl + 1e-9;
 }
 
+/* verdict() judges numeric tolerance only, so a characteristic with no
+   nominal/tolerance — a note, a visual check, anything recorded as plain
+   text like "Pass" — comes back null even once someone has measured it.
+   status() is what "Open" badges and balloon color should actually track:
+   null only ever means nothing has been recorded yet. */
+function status(b){
+  if((b.actual||"") === "") return null;
+  const v = verdict(b);
+  return v === false ? false : true;
+}
+
 /* ============================ list ============================ */
 function tallyText(){
   const total = S.balloons.length;
@@ -2199,7 +2210,7 @@ function paintList(){
 }
 
 function shell(b){
-  const v = verdict(b);
+  const v = status(b);
   const row = document.createElement("div");
   row.className = "row" + (S.sel===b.id?" sel":"");
   row.dataset.id = b.id;
@@ -2306,7 +2317,7 @@ function bindRow(row, b){
 
 /* live update without rebuilding the whole list under the cursor */
 function refreshRow(row, b){
-  const v = verdict(b);
+  const v = status(b);
   const st = row.querySelector(".stamp");
   st.className = "stamp " + (v===true?"ok":v===false?"no":"na");
   st.textContent = v===true?"Accept":v===false?"Reject":"Open";
