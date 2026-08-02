@@ -502,13 +502,14 @@ body.operator .planner-only{display:none!important}
 }
 .ro.none{color:#4a5866;font-style:italic}
 
-/* balloon status on the print, inspect mode only */
-.bub.st-open circle{stroke:#6d7f8f}
+/* balloon status on the print, inspect mode only. Tinted fill, not just the
+   outline ring — a 1.6px stroke color is too easy to miss at a glance; a
+   filled circle reads as a color from across the room. */
+.bub.st-open circle{stroke:#6d7f8f;fill:#e9edf1}
 .bub.st-open text{fill:#5f7080}
-.bub.st-ok circle{stroke:var(--stamp)}
+.bub.st-ok circle{stroke:var(--stamp);fill:#e6f7ef}
 .bub.st-ok text{fill:var(--stamp)}
-.bub.st-ok.sel circle{fill:#e6f7ef}
-.bub.st-no.sel circle{fill:#ffe9e7}
+.bub.st-no circle{fill:#ffe4e1}
 .leader.st-open{stroke:#6d7f8f}
 .leader.st-ok{stroke:var(--stamp)}
 .anchor.st-open{fill:#6d7f8f}
